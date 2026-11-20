@@ -2,10 +2,23 @@ use iced::widget::image;
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 pub const SYMBOLS: &[u8] = include_bytes!("../assets/FrostSymbols.ttf");
 pub const ICON_FONT: iced::Font = iced::Font::with_name("Symbols Nerd Font");
+
+pub fn ice_icon() -> image::Handle {
+    static ICON: OnceLock<image::Handle> = OnceLock::new();
+    ICON.get_or_init(|| image::Handle::from_bytes(include_bytes!("../assets/ice.png").as_slice()))
+        .clone()
+}
+
+pub fn owl_icon() -> image::Handle {
+    static ICON: OnceLock<image::Handle> = OnceLock::new();
+    ICON.get_or_init(|| image::Handle::from_bytes(include_bytes!("../assets/owl.png").as_slice()))
+        .clone()
+}
 
 pub fn icon_theme() -> String {
     if let Ok(theme) = env::var("FROST_ICON_THEME")

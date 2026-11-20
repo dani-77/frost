@@ -10,7 +10,8 @@
 
 - Each output gets a `Layer::Bottom` surface only while no wallpaper is active. It uses `LayerSize::FILL` and all four anchors. The compositor assigns its logical size; Frost does not divide physical resolutions by the scale factor.
 - The surface passes through pointer events and sits above wallpaper daemons on the Background layer.
-- The backdrop embeds the d77 logo from quickshell-d77 in the lower left corner. Rendering is checked at scale factors 1 and 2.
+- The backdrop shows the owl emblem in the lower left corner at low opacity. Rendering is checked at scale factors 1 and 2.
+- The crystal marks the launcher in the bar, the owl appears on the lock screen and backdrop, and the terminal emblem introduces the README.
 
 ## Workspaces
 

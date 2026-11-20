@@ -310,12 +310,11 @@ impl Frost {
             .content_fit(ContentFit::Fill)
             .into();
         let logo: Element<'_, Message> = container(
-            svg(svg::Handle::from_memory(
-                include_bytes!("../assets/d77-logo.svg").to_vec(),
-            ))
-            .width(180)
-            .height(180)
-            .opacity(0.25_f32),
+            image(crate::media::owl_icon())
+                .width(180)
+                .height(180)
+                .content_fit(ContentFit::Contain)
+                .opacity(0.25_f32),
         )
         .width(Length::Fill)
         .height(Length::Fill)
@@ -686,7 +685,7 @@ mod tests {
     use iced_tiny_skia::{Renderer, core::renderer, graphics::Viewport, window::compositor};
 
     #[test]
-    fn backdrop_renders_the_embedded_logo_in_the_lower_left_corner() {
+    fn backdrop_renders_the_owl_in_the_lower_left_corner() {
         let (frost, _tasks) = Frost::new(iced_wayland_subscriber::shell::channel().1);
         let theme = frost.palette.theme();
         for scale in [1_usize, 2] {
@@ -719,7 +718,7 @@ mod tests {
                 .count();
             assert!(
                 logo_pixels > 100 * scale * scale,
-                "d77 logo did not render at scale {scale}"
+                "owl did not render at scale {scale}"
             );
         }
     }

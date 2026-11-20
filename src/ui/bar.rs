@@ -5,8 +5,8 @@ use crate::{
     telemetry::{Network, Power},
 };
 use iced::{
-    Alignment, Color, Element, Length, mouse,
-    widget::{Space, button, container, mouse_area, responsive, row, scrollable, text},
+    Alignment, Color, ContentFit, Element, Length, mouse,
+    widget::{Space, button, container, image, mouse_area, responsive, row, scrollable, text},
     window::Id,
 };
 
@@ -25,30 +25,35 @@ fn panel_button(
     active: bool,
 ) -> button::Button<'static, Message> {
     let foreground = if active { p.background } else { color };
-    button(
-        container(icon(glyph, 17, foreground))
-            .center_x(28)
-            .center_y(26),
-    )
-    .padding(0)
-    .style(move |_, status| button::Style {
-        background: Some(
-            if active {
-                color
-            } else if status == button::Status::Hovered {
-                tinted(color, 0.27)
-            } else {
-                tinted(color, 0.13)
-            }
-            .into(),
-        ),
-        border: iced::Border {
-            radius: 6.0.into(),
+    panel_button_content(icon(glyph, 17, foreground).into(), color, panel, active)
+}
+
+fn panel_button_content(
+    content: Element<'static, Message>,
+    color: Color,
+    panel: Panel,
+    active: bool,
+) -> button::Button<'static, Message> {
+    button(container(content).center_x(28).center_y(26))
+        .padding(0)
+        .style(move |_, status| button::Style {
+            background: Some(
+                if active {
+                    color
+                } else if status == button::Status::Hovered {
+                    tinted(color, 0.27)
+                } else {
+                    tinted(color, 0.13)
+                }
+                .into(),
+            ),
+            border: iced::Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        ..Default::default()
-    })
-    .on_press(Message::Toggle(panel))
+        })
+        .on_press(Message::Toggle(panel))
 }
 
 fn indicator(
@@ -288,9 +293,18 @@ impl Frost {
         ]
         .spacing(4)
         .align_y(Alignment::Center);
+        let crystal = image(crate::media::ice_icon())
+            .width(24)
+            .height(24)
+            .content_fit(ContentFit::Contain);
         container(
             row![
-                panel("󰍜", p.purple, Panel::Launcher),
+                panel_button_content(
+                    crystal.into(),
+                    p.ice,
+                    Panel::Launcher,
+                    active(Panel::Launcher)
+                ),
                 divider(),
                 workspaces,
                 status,

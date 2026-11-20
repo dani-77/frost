@@ -1,5 +1,7 @@
 # Frost
 
+<p align="center"><img src="assets/terminal.png" alt="Frost terminal emblem" width="220"></p>
+
 Frost is a Wayland shell in Rust inspired by [quickshell-d77](https://github.com/dani-77/quickshell-d77/tree/5b5a1b5560a676339d31e6361650b6a5e8899a37). Its panels use layer shell through `iced_exwlshell`; the locker uses Wayland session lock surfaces through Smithay Client Toolkit. Both are drawn with Iced 0.14 and Tiny Skia.
 
 | Component | Frost 0.1 |
@@ -101,7 +103,7 @@ The launcher resolves `Icon=` through the configured GTK theme and then `hicolor
 
 ## Wallpaper and color
 
-`FROST_WALLPAPERS` sets the picker directory and should be an absolute path. On selection, Frost stores the choice in `${XDG_CACHE_HOME:-$HOME/.cache}/frost/wallpaper/current` and, if Matugen is installed, updates the shared `d77/palette.json` under the same cache root. Palette strength uses `~/.config/d77/theme-mix`, shared with the other shells, and can be changed in the picker. With no selected image, Frost shows a backdrop per output on the Bottom layer, including the d77 logo from quickshell-d77. The compositor sizes it in logical coordinates, including at scales other than 1.
+`FROST_WALLPAPERS` sets the picker directory and should be an absolute path. On selection, Frost stores the choice in `${XDG_CACHE_HOME:-$HOME/.cache}/frost/wallpaper/current` and, if Matugen is installed, updates the shared `d77/palette.json` under the same cache root. Palette strength uses `~/.config/d77/theme-mix`, shared with the other shells, and can be changed in the picker. With no selected image, Frost shows a backdrop per output on the Bottom layer, with the owl emblem in the lower left corner. The compositor sizes it in logical coordinates, including at scales other than 1.
 
 ```sh
 FROST_WALLPAPERS="$HOME/Pictures/Wallpapers" frost run

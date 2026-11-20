@@ -1,10 +1,10 @@
 use crate::ui::Palette;
 use iced::{
-    Element, Font, Length, Size, Theme,
+    ContentFit, Element, Font, Length, Size, Theme,
     alignment::Horizontal,
     font::Weight,
     mouse,
-    widget::{column, container, text},
+    widget::{column, container, image, text},
 };
 use iced_runtime::user_interface::{Cache, UserInterface};
 use iced_tiny_skia::{Renderer, core::renderer, graphics::Viewport, window::compositor};
@@ -31,8 +31,15 @@ impl ViewState {
         true
     }
 
-    fn element(&self, palette: Palette) -> Element<'_, (), Theme, Renderer> {
+    fn element(
+        &self,
+        palette: Palette,
+        width: u32,
+        height: u32,
+    ) -> Element<'_, (), Theme, Renderer> {
         let colors = palette.theme().palette();
+        let compact = height < 440;
+        let owl_size = if compact { 88 } else { 176 };
         let status = if self.checking {
             "Checking password…"
         } else if self.show_error {
@@ -60,11 +67,17 @@ impl ViewState {
                 ..Default::default()
             });
         let content = column![
+            image(crate::media::owl_icon())
+                .width(owl_size)
+                .height(owl_size)
+                .content_fit(ContentFit::Contain),
             text("Frost").size(15).color(colors.primary),
-            text(&self.clock).size(58).font(Font {
-                weight: Weight::Semibold,
-                ..Font::DEFAULT
-            }),
+            text(&self.clock)
+                .size(if compact { 48 } else { 58 })
+                .font(Font {
+                    weight: Weight::Semibold,
+                    ..Font::DEFAULT
+                }),
             text(&self.date).size(16),
             input,
             text(status).size(13).color(if self.show_error {
@@ -74,10 +87,10 @@ impl ViewState {
             }),
         ]
         .align_x(iced::Alignment::Center)
-        .spacing(12)
-        .width(300);
+        .spacing(if compact { 7 } else { 12 })
+        .width(width.saturating_sub(24).min(340));
         container(content)
-            .padding(16)
+            .padding(if compact { 8 } else { 16 })
             .center_x(Length::Fill)
             .center_y(Length::Fill)
             .into()
@@ -99,7 +112,12 @@ pub(super) fn draw(
     let theme = palette.theme();
     let bounds = Size::new(width as f32, height as f32);
     // The renderer holds weak references to text paragraphs owned by the UI.
-    let mut ui = UserInterface::build(state.element(palette), bounds, Cache::new(), renderer);
+    let mut ui = UserInterface::build(
+        state.element(palette, width, height),
+        bounds,
+        Cache::new(),
+        renderer,
+    );
     ui.draw(
         renderer,
         &theme,
