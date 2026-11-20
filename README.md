@@ -47,6 +47,8 @@ sudo make install
 
 This installs `/usr/bin/frost`, a PAM policy at `/etc/pam.d/frost-locker`, the example configuration at `/usr/share/frost/config.example.toml`, and the licenses under `/usr/share/licenses/frost`. The Makefile detects Void, Arch, Debian derivatives, and Chimera (including hybrid-d77 through `ID_LIKE`) from `/etc/os-release`. Override the choice when staging for another system, for example `make install DESTDIR=/tmp/frost-package PAM_VARIANT=chimera`. The Chimera policy follows hybrid-d77's local `pam_unix.so` authentication and adds the account rule required by Frost. `PREFIX` defaults to `/usr`; `DESTDIR` stages an install for packaging. Run `sudo make uninstall` to remove the installed files. If `~/.cargo/bin` precedes `/usr/bin` in `PATH`, `frost` still resolves to the user-installed copy; check with `command -v frost`.
 
+Versioned packaging recipes are in [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD) and [`packaging/void/template`](packaging/void/template). Both use the `v0.1.0` source tag and install the distribution-specific PAM policy.
+
 | Integration | Runtime dependency |
 | --- | --- |
 | Launcher | `gio` |
