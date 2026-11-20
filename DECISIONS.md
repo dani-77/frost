@@ -8,7 +8,8 @@
 
 ## Backdrop and display scaling
 
-- Each output gets a `Layer::Bottom` surface only while no wallpaper is active. It uses `LayerSize::FILL` and all four anchors. The compositor assigns its logical size; Frost does not divide physical resolutions by the scale factor.
+- Each output gets a `Layer::Bottom` surface only while no wallpaper is active. It uses `LayerSize::FILL`, all four anchors, and exclusive zone `-1` so it also covers the area reserved by the bar. The compositor assigns its logical size; Frost does not divide physical resolutions by the scale factor.
+- The shell uses the WGPU renderer for alpha compositing around its rounded surfaces. Tiny Skia remains available for headless rendering tests and the locker.
 - The surface passes through pointer events and sits above wallpaper daemons on the Background layer.
 - The backdrop shows the owl emblem in the lower left corner at low opacity. Rendering is checked at scale factors 1 and 2.
 - The crystal marks the launcher in the bar, the owl appears on the lock screen and backdrop, and the terminal emblem introduces the README.

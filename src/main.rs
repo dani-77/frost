@@ -182,7 +182,7 @@ struct Snapshot {
     volume: Option<Level>,
     brightness: Option<Level>,
     music: Option<Music>,
-    battery: Option<u16>,
+    battery: Option<services::Battery>,
     memory: Option<u16>,
     cpu: Option<telemetry::Cpu>,
     load: Option<String>,
@@ -225,6 +225,7 @@ enum Message {
     PowerRead(Option<telemetry::PowerProfiles>),
     Weather(Option<String>),
     CyclePower,
+    ToggleBatteryTime,
     OpenNetwork,
     PowerChanged(Result<telemetry::PowerProfiles, String>),
     AppsLoaded(Id, Vec<App>),
@@ -284,6 +285,7 @@ struct Frost {
     power: Option<telemetry::PowerProfiles>,
     power_pending: bool,
     power_checked: Option<Instant>,
+    battery_show_time: bool,
     weather: Option<String>,
     weather_checked: Option<Instant>,
     weather_pending: bool,
@@ -326,6 +328,7 @@ impl Frost {
             power: None,
             power_pending: false,
             power_checked: None,
+            battery_show_time: false,
             weather: None,
             weather_checked: None,
             weather_pending: false,
@@ -497,6 +500,10 @@ impl Frost {
             Message::PowerRead(power) => {
                 self.power_pending = false;
                 self.power = power;
+                Task::none()
+            }
+            Message::ToggleBatteryTime => {
+                self.battery_show_time = !self.battery_show_time;
                 Task::none()
             }
             Message::Weather(weather) => {
@@ -979,7 +986,7 @@ impl Frost {
                     size: LayerSize::FILL,
                     anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
                     layer: Layer::Bottom,
-                    exclusive_zone: Some(0),
+                    exclusive_zone: Some(-1),
                     keyboard_interactivity: KeyboardInteractivity::None,
                     output_option: OutputOption::GlobalName(output.0),
                     events_transparent: true,

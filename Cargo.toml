@@ -14,7 +14,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 freedesktop-desktop-entry = { version = "0.8", default-features = false }
 freedesktop-icons = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
-iced = { version = "=0.14.0", default-features = false, features = ["tiny-skia", "wayland", "tokio", "fira-sans", "advanced-shaping", "lazy", "image-without-codecs", "svg"] }
+iced = { version = "=0.14.0", default-features = false, features = ["wgpu", "tiny-skia", "wayland", "tokio", "fira-sans", "advanced-shaping", "lazy", "image-without-codecs", "svg"] }
 iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
 iced_wayland_subscriber = { version = "=0.21.4", features = ["workspace"] }
 iced_runtime = "=0.14.0"

@@ -264,21 +264,45 @@ impl Frost {
             );
         }
         if let Some(battery) = self.snapshot.battery {
-            let glyph = match battery {
-                0..=19 => "󰁺",
-                20..=39 => "󰁼",
-                40..=59 => "󰁾",
-                60..=79 => "󰂀",
-                _ => "󰁹",
+            let glyph = match battery.status {
+                crate::services::BatteryStatus::Charging => "󰂄",
+                _ => match battery.percent {
+                    0..=19 => "󰁺",
+                    20..=39 => "󰁼",
+                    40..=59 => "󰁾",
+                    60..=79 => "󰂀",
+                    _ => "󰁹",
+                },
             };
-            let tone = if battery < 20 {
+            let tone = if battery.percent < 20
+                && battery.status == crate::services::BatteryStatus::Discharging
+            {
                 p.danger
-            } else if battery < 50 {
+            } else if battery.percent < 50
+                && battery.status == crate::services::BatteryStatus::Discharging
+            {
                 p.yellow
             } else {
                 p.green
             };
-            status = status.push(indicator(glyph, format!("{battery}%"), tone, p.foreground));
+            status = status.push(
+                p.button(
+                    indicator(
+                        glyph,
+                        battery.label(self.battery_show_time),
+                        tone,
+                        p.foreground,
+                    ),
+                    self.battery_show_time && battery.remaining_minutes.is_some(),
+                )
+                .padding([4, 5])
+                .on_press_maybe(
+                    battery
+                        .remaining_minutes
+                        .is_some()
+                        .then_some(Message::ToggleBatteryTime),
+                ),
+            );
         }
         let clock = if width >= 970.0 {
             self.clock.format("%a %d %b  %H:%M").to_string()
@@ -346,7 +370,11 @@ mod tests {
         let (mut frost, _tasks) = Frost::new(iced_wayland_subscriber::shell::channel().1);
         frost.cpu_usage = Some(54);
         frost.snapshot.memory = Some(68);
-        frost.snapshot.battery = Some(74);
+        frost.snapshot.battery = Some(crate::services::Battery {
+            percent: 74,
+            status: crate::services::BatteryStatus::Discharging,
+            remaining_minutes: Some(127),
+        });
         frost.snapshot.workspaces = (1..=9)
             .map(|id| Workspace {
                 id,
@@ -369,7 +397,7 @@ mod tests {
         for width in [600_u32, 1040] {
             let height = crate::BAR_HEIGHT;
             let viewport = Viewport::with_physical_size(Size::new(width, height), 1.0);
-            let mut renderer = Renderer::new(Font::DEFAULT, 16.0.into());
+            let mut renderer = iced::Renderer::Secondary(Renderer::new(Font::DEFAULT, 16.0.into()));
             let mut ui = UserInterface::build(
                 frost.bar_view(Id::unique()),
                 viewport.logical_size(),
@@ -384,7 +412,12 @@ mod tests {
                 },
                 mouse::Cursor::Unavailable,
             );
-            let pixels = compositor::screenshot(&mut renderer, &viewport, Color::TRANSPARENT);
+            let pixels = match &mut renderer {
+                iced::Renderer::Secondary(renderer) => {
+                    compositor::screenshot(renderer, &viewport, Color::TRANSPARENT)
+                }
+                iced::Renderer::Primary(_) => unreachable!(),
+            };
             // The far-right session button should remain visible even with all workspaces and indicators.
             let danger = frost.palette.danger.into_rgba8();
             assert!(

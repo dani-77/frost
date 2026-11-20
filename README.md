@@ -6,7 +6,7 @@ Frost is a Wayland shell in Rust inspired by [quickshell-d77](https://github.com
 
 | Component | Frost 0.1 |
 | --- | --- |
-| Bar | A floating bar per output with CPU, RAM, network, power profile, battery, clock, and workspaces. Sway, Hyprland, and niri use their IPC; other compositors can use `ext-workspace-v1`. |
+| Bar | A floating bar per output with CPU, RAM, network, power profile, battery, clock, and workspaces. Click the battery to switch between percentage and estimated time; systems without a built-in battery omit it. Sway, Hyprland, and niri use their IPC; other compositors can use `ext-workspace-v1`. |
 | Launcher | Searches XDG `.desktop` entries with application icons. Arrow keys select, Enter launches, and Esc closes. `Terminal=true` uses the configured terminal. |
 | Dashboard | CPU, memory, load, battery, weather, volume and brightness sliders, cmus controls, and session actions in a single view without scrolling. |
 | OSD | Shows volume and brightness changes. Media keys can call Frost directly. |

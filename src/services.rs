@@ -514,19 +514,127 @@ pub fn load() -> Option<String> {
     data.split_whitespace().next().map(str::to_owned)
 }
 
-pub fn battery() -> Option<u16> {
-    let batteries = fs::read_dir("/sys/class/power_supply").ok()?;
-    batteries.flatten().find_map(|entry| {
-        let path = entry.path();
-        if fs::read_to_string(path.join("type")).ok()?.trim() != "Battery" {
-            return None;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BatteryStatus {
+    Charging,
+    Discharging,
+    Full,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Battery {
+    pub percent: u16,
+    pub status: BatteryStatus,
+    pub remaining_minutes: Option<u64>,
+}
+
+impl Battery {
+    pub fn label(self, show_time: bool) -> String {
+        if show_time && let Some(minutes) = self.remaining_minutes {
+            return if minutes >= 60 {
+                format!("{}h{:02}", minutes / 60, minutes % 60)
+            } else {
+                format!("{minutes}m")
+            };
         }
-        fs::read_to_string(path.join("capacity"))
-            .ok()?
-            .trim()
-            .parse()
-            .ok()
+        format!("{}%", self.percent)
+    }
+}
+
+fn battery_value(path: &Path, name: &str) -> Option<u64> {
+    fs::read_to_string(path.join(name))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+fn battery_remaining(path: &Path, status: BatteryStatus) -> Option<u64> {
+    let direct = match status {
+        BatteryStatus::Charging => "time_to_full_now",
+        BatteryStatus::Discharging => "time_to_empty_now",
+        _ => return None,
+    };
+    if let Some(seconds) = battery_value(path, direct).filter(|seconds| *seconds > 0) {
+        return Some(seconds.div_ceil(60));
+    }
+    for (current, full, rate) in [
+        ("energy_now", "energy_full", "power_now"),
+        ("charge_now", "charge_full", "current_now"),
+    ] {
+        let Some(now) = battery_value(path, current) else {
+            continue;
+        };
+        let Some(rate) = battery_value(path, rate).filter(|rate| *rate > 0) else {
+            continue;
+        };
+        let remaining = if status == BatteryStatus::Charging {
+            let Some(full) = battery_value(path, full) else {
+                continue;
+            };
+            full.saturating_sub(now)
+        } else {
+            now
+        };
+        return Some(remaining.saturating_mul(60).div_ceil(rate));
+    }
+    None
+}
+
+fn battery_at(path: &Path) -> Option<Battery> {
+    if fs::read_to_string(path.join("type")).ok()?.trim() != "Battery"
+        || fs::read_to_string(path.join("scope")).is_ok_and(|scope| scope.trim() == "Device")
+        || battery_value(path, "present") == Some(0)
+    {
+        return None;
+    }
+    let percent = battery_value(path, "capacity")?.min(100) as u16;
+    let status = match fs::read_to_string(path.join("status")).ok()?.trim() {
+        "Charging" => BatteryStatus::Charging,
+        "Discharging" => BatteryStatus::Discharging,
+        "Full" => BatteryStatus::Full,
+        _ => BatteryStatus::Unknown,
+    };
+    Some(Battery {
+        percent,
+        status,
+        remaining_minutes: battery_remaining(path, status),
     })
+}
+
+pub fn battery() -> Option<Battery> {
+    let batteries = fs::read_dir("/sys/class/power_supply").ok()?;
+    batteries
+        .flatten()
+        .find_map(|entry| battery_at(&entry.path()))
+}
+
+#[cfg(test)]
+mod battery_tests {
+    use super::*;
+
+    #[test]
+    fn estimates_remaining_time_and_ignores_device_batteries() {
+        let path = env::temp_dir().join(format!("frost-battery-test-{}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("type"), "Battery\n").unwrap();
+        fs::write(path.join("capacity"), "40\n").unwrap();
+        fs::write(path.join("status"), "Discharging\n").unwrap();
+        fs::write(path.join("energy_now"), "2000000\n").unwrap();
+        fs::write(path.join("power_now"), "1000000\n").unwrap();
+        let battery = battery_at(&path).unwrap();
+        assert_eq!(battery.remaining_minutes, Some(120));
+        assert_eq!(battery.label(true), "2h00");
+
+        fs::write(path.join("status"), "Charging\n").unwrap();
+        fs::write(path.join("time_to_full_now"), "2700\n").unwrap();
+        assert_eq!(battery_at(&path).unwrap().label(true), "45m");
+
+        fs::write(path.join("scope"), "Device\n").unwrap();
+        assert!(battery_at(&path).is_none());
+        fs::remove_dir_all(path).unwrap();
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

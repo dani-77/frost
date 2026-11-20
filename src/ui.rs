@@ -429,13 +429,15 @@ impl Frost {
                 .padding([8, 10])
                 .style(move |_| p.tile(p.background, 8.0))
         };
-        let metrics = row![
+        let mut metrics = row![
             metric("CPU", percent(self.cpu_usage)),
             metric("Memory", percent(s.memory)),
             metric("Load · 1 min", s.load.clone().unwrap_or_else(|| "—".into())),
-            metric("Battery", percent(s.battery)),
         ]
         .spacing(6);
+        if let Some(battery) = s.battery {
+            metrics = metrics.push(metric("Battery", percent(Some(battery.percent))));
+        }
         let header = |label, level| {
             row![
                 heading(label, 14).width(Length::Fill),
@@ -694,7 +696,7 @@ mod tests {
                 Size::new(width as u32, (600 * scale) as u32),
                 scale as f32,
             );
-            let mut renderer = Renderer::new(Font::DEFAULT, 16.0.into());
+            let mut renderer = iced::Renderer::Secondary(Renderer::new(Font::DEFAULT, 16.0.into()));
             let mut ui = UserInterface::build(
                 frost.backdrop_view(),
                 viewport.logical_size(),
@@ -709,7 +711,12 @@ mod tests {
                 },
                 mouse::Cursor::Unavailable,
             );
-            let frame = compositor::screenshot(&mut renderer, &viewport, Color::TRANSPARENT);
+            let frame = match &mut renderer {
+                iced::Renderer::Secondary(renderer) => {
+                    compositor::screenshot(renderer, &viewport, Color::TRANSPARENT)
+                }
+                iced::Renderer::Primary(_) => unreachable!(),
+            };
             let pixel = |x: usize, y: usize| &frame[4 * (y * width + x)..4 * (y * width + x) + 4];
             let background = pixel(20 * scale, 400 * scale).to_vec();
             let logo_pixels = (48 * scale..228 * scale)
@@ -740,7 +747,7 @@ mod tests {
             percent: 60,
             muted: false,
         });
-        let renderer = Renderer::new(Font::DEFAULT, 16.0.into());
+        let renderer = iced::Renderer::Secondary(Renderer::new(Font::DEFAULT, 16.0.into()));
         let mut element = frost.panel_view(Panel::Dashboard);
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
@@ -782,7 +789,7 @@ mod tests {
         for (panel, width, height) in [(Panel::Launcher, 520, 470), (Panel::Wallpaper, 550, 480)] {
             let viewport = Viewport::with_physical_size(Size::new(width, height), 1.0);
             let theme = frost.palette.theme();
-            let mut renderer = Renderer::new(Font::DEFAULT, 16.0.into());
+            let mut renderer = iced::Renderer::Secondary(Renderer::new(Font::DEFAULT, 16.0.into()));
             let mut ui = UserInterface::build(
                 frost.panel_view(panel),
                 viewport.logical_size(),
@@ -797,7 +804,12 @@ mod tests {
                 },
                 mouse::Cursor::Unavailable,
             );
-            let frame = compositor::screenshot(&mut renderer, &viewport, Color::TRANSPARENT);
+            let frame = match &mut renderer {
+                iced::Renderer::Secondary(renderer) => {
+                    compositor::screenshot(renderer, &viewport, Color::TRANSPARENT)
+                }
+                iced::Renderer::Primary(_) => unreachable!(),
+            };
             assert!(
                 frame.as_chunks::<4>().0.contains(&marker),
                 "{panel:?} did not render the image"
