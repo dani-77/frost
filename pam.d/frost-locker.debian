@@ -1,0 +1,3 @@
+# Install as /etc/pam.d/frost-locker on Debian-based distributions.
+@include common-auth
+@include common-account
