@@ -10,6 +10,7 @@
 
 - Each output gets a `Layer::Bottom` surface only while no wallpaper is active. It uses `LayerSize::FILL` and all four anchors. The compositor assigns its logical size; Frost does not divide physical resolutions by the scale factor.
 - The surface passes through pointer events and sits above wallpaper daemons on the Background layer.
+- The backdrop embeds the d77 logo from quickshell-d77 in the lower left corner. Rendering is checked at scale factors 1 and 2.
 
 ## Workspaces
 
@@ -19,5 +20,6 @@
 ## Dashboard and terminal
 
 - The dashboard follows the other shells' 8–12 px spacing and includes weather updated every 15 minutes, cmus controls, and session actions with confirmation for exit actions.
+- The dashboard fits all sections in a 420 × 520 logical pixel panel without a scroll area. The volume and brightness sliders replace redundant plus/minus rows.
 - Volume and brightness sliders apply the latest requested value in sequence, so a rapid drag cannot leave an older value applied last.
 - The launcher honors `Terminal=true` desktop entries. It and the `nmtui` button resolve a terminal in the same order: `TERMINAL`, `xdg-terminal-exec`, then installed terminals.

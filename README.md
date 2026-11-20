@@ -6,7 +6,7 @@ Frost is a Wayland shell in Rust inspired by [quickshell-d77](https://github.com
 | --- | --- |
 | Bar | A floating bar per output with CPU, RAM, network, power profile, battery, clock, and workspaces. Sway, Hyprland, and niri use their IPC; other compositors can use `ext-workspace-v1`. |
 | Launcher | Searches XDG `.desktop` entries with application icons. Arrow keys select, Enter launches, and Esc closes. `Terminal=true` uses the configured terminal. |
-| Dashboard | CPU, memory, load, battery, weather, volume and brightness sliders, cmus controls, and session actions. |
+| Dashboard | CPU, memory, load, battery, weather, volume and brightness sliders, cmus controls, and session actions in a single view without scrolling. |
 | OSD | Shows volume and brightness changes. Media keys can call Frost directly. |
 | Wallpaper | Previews images in `~/Wallpaper`, applies them through `awww` or `swww`, generates a Matugen palette, and shows a backdrop when no wallpaper is active. |
 | Session | Native locker, suspend, logout, reboot, and power off. The last three require confirmation. |
@@ -101,7 +101,7 @@ The launcher resolves `Icon=` through the configured GTK theme and then `hicolor
 
 ## Wallpaper and color
 
-`FROST_WALLPAPERS` sets the picker directory and should be an absolute path. On selection, Frost stores the choice in `${XDG_CACHE_HOME:-$HOME/.cache}/frost/wallpaper/current` and, if Matugen is installed, updates the shared `d77/palette.json` under the same cache root. Palette strength uses `~/.config/d77/theme-mix`, shared with the other shells, and can be changed in the picker. With no selected image, Frost shows a backdrop per output on the Bottom layer. The compositor sizes it in logical coordinates, including at scales other than 1.
+`FROST_WALLPAPERS` sets the picker directory and should be an absolute path. On selection, Frost stores the choice in `${XDG_CACHE_HOME:-$HOME/.cache}/frost/wallpaper/current` and, if Matugen is installed, updates the shared `d77/palette.json` under the same cache root. Palette strength uses `~/.config/d77/theme-mix`, shared with the other shells, and can be changed in the picker. With no selected image, Frost shows a backdrop per output on the Bottom layer, including the d77 logo from quickshell-d77. The compositor sizes it in logical coordinates, including at scales other than 1.
 
 ```sh
 FROST_WALLPAPERS="$HOME/Pictures/Wallpapers" frost run

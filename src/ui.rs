@@ -9,8 +9,8 @@ use iced::{
     font::Weight,
     theme::Palette as IcedPalette,
     widget::{
-        Space, button, column, container, image, progress_bar, row, scrollable, slider, svg, text,
-        text_input,
+        Space, button, column, container, image, progress_bar, row, scrollable, slider, stack, svg,
+        text, text_input,
     },
 };
 use std::{env, fs, path::PathBuf};
@@ -214,7 +214,7 @@ impl Palette {
             false,
         )
         .width(Length::Fill)
-        .padding([10, 4])
+        .padding([7, 4])
         .on_press(Message::Session(action))
     }
 
@@ -304,11 +304,29 @@ impl Frost {
         let art = format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="600" viewBox="0 0 1000 600" preserveAspectRatio="none"><polygon points="640,-200 990,-200 580,800 230,800" fill="{purple}" opacity=".16"/><polygon points="900,-200 1130,-200 720,800 490,800" fill="{purple}" opacity=".38"/></svg>"#
         );
+        let background: Element<'_, Message> = svg(svg::Handle::from_memory(art.into_bytes()))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .content_fit(ContentFit::Fill)
+            .into();
+        let logo: Element<'_, Message> = container(
+            svg(svg::Handle::from_memory(
+                include_bytes!("../assets/d77-logo.svg").to_vec(),
+            ))
+            .width(180)
+            .height(180)
+            .opacity(0.25_f32),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(48)
+        .align_x(Alignment::Start)
+        .align_y(Alignment::End)
+        .into();
         container(
-            svg(svg::Handle::from_memory(art.into_bytes()))
+            stack([background, logo])
                 .width(Length::Fill)
-                .height(Length::Fill)
-                .content_fit(ContentFit::Fill),
+                .height(Length::Fill),
         )
         .width(Length::Fill)
         .height(Length::Fill)
@@ -427,16 +445,9 @@ impl Frost {
             .align_y(Alignment::Center)
         };
         let audio = column![
-            header("Volume", s.volume),
-            slider(
-                0..=100,
-                s.volume.map_or(0, |level| level.percent.min(100)),
-                Message::SetVolume
-            )
-            .step(1_u16),
             row![
-                p.action("−", Message::Adjust(Control::VolumeDown)),
-                p.action("+", Message::Adjust(Control::VolumeUp)),
+                heading("Volume", 14).width(Length::Fill),
+                p.label(level_text(s.volume)),
                 p.action(
                     if s.volume.is_some_and(|level| level.muted) {
                         "Unmute"
@@ -446,7 +457,14 @@ impl Frost {
                     Message::Adjust(Control::VolumeMute)
                 ),
             ]
-            .spacing(5),
+            .spacing(8)
+            .align_y(Alignment::Center),
+            slider(
+                0..=100,
+                s.volume.map_or(0, |level| level.percent.min(100)),
+                Message::SetVolume
+            )
+            .step(1_u16),
         ]
         .spacing(6);
         let backlight = column![
@@ -457,11 +475,6 @@ impl Frost {
                 Message::SetBrightness
             )
             .step(1_u16),
-            row![
-                p.action("−", Message::Adjust(Control::BrightnessDown)),
-                p.action("+", Message::Adjust(Control::BrightnessUp)),
-            ]
-            .spacing(5),
         ]
         .spacing(6);
         let music = if let Some(music) = &s.music {
@@ -493,36 +506,34 @@ impl Frost {
             ]
             .spacing(4)
         };
-        scrollable(
-            column![
-                metrics,
-                container(
-                    row![
-                        icon("󰖐", 22, p.cyan),
-                        text(self.weather.as_deref().unwrap_or("Weather unavailable")).size(12)
-                    ]
-                    .spacing(12)
-                    .align_y(Alignment::Center)
-                )
+        column![
+            metrics,
+            container(
+                row![
+                    icon("󰖐", 22, p.cyan),
+                    text(self.weather.as_deref().unwrap_or("Weather unavailable")).size(12)
+                ]
+                .spacing(12)
+                .align_y(Alignment::Center)
+            )
+            .width(Length::Fill)
+            .padding(10)
+            .style(move |_| p.tile(p.background, 8.0)),
+            audio,
+            backlight,
+            container(music)
                 .width(Length::Fill)
                 .padding(10)
                 .style(move |_| p.tile(p.background, 8.0)),
-                audio,
-                backlight,
-                container(music)
-                    .width(Length::Fill)
-                    .padding(10)
-                    .style(move |_| p.tile(p.background, 8.0)),
-                row![
-                    p.session_tile(Session::Lock),
-                    p.session_tile(Session::Logout),
-                    p.session_tile(Session::Reboot),
-                    p.session_tile(Session::PowerOff),
-                ]
-                .spacing(8),
+            row![
+                p.session_tile(Session::Lock),
+                p.session_tile(Session::Logout),
+                p.session_tile(Session::Reboot),
+                p.session_tile(Session::PowerOff),
             ]
-            .spacing(10),
-        )
+            .spacing(8),
+        ]
+        .spacing(10)
         .height(Length::Fill)
         .into()
     }
@@ -671,7 +682,83 @@ mod tests {
     use crate::services::App;
     use iced::{Size, mouse};
     use iced_runtime::user_interface::{Cache, UserInterface};
+    use iced_tiny_skia::core::{layout, widget::Tree};
     use iced_tiny_skia::{Renderer, core::renderer, graphics::Viewport, window::compositor};
+
+    #[test]
+    fn backdrop_renders_the_embedded_logo_in_the_lower_left_corner() {
+        let (frost, _tasks) = Frost::new(iced_wayland_subscriber::shell::channel().1);
+        let theme = frost.palette.theme();
+        for scale in [1_usize, 2] {
+            let width = 1000 * scale;
+            let viewport = Viewport::with_physical_size(
+                Size::new(width as u32, (600 * scale) as u32),
+                scale as f32,
+            );
+            let mut renderer = Renderer::new(Font::DEFAULT, 16.0.into());
+            let mut ui = UserInterface::build(
+                frost.backdrop_view(),
+                viewport.logical_size(),
+                Cache::new(),
+                &mut renderer,
+            );
+            ui.draw(
+                &mut renderer,
+                &theme,
+                &renderer::Style {
+                    text_color: theme.palette().text,
+                },
+                mouse::Cursor::Unavailable,
+            );
+            let frame = compositor::screenshot(&mut renderer, &viewport, Color::TRANSPARENT);
+            let pixel = |x: usize, y: usize| &frame[4 * (y * width + x)..4 * (y * width + x) + 4];
+            let background = pixel(20 * scale, 400 * scale).to_vec();
+            let logo_pixels = (48 * scale..228 * scale)
+                .flat_map(|x| (372 * scale..552 * scale).map(move |y| (x, y)))
+                .filter(|&(x, y)| pixel(x, y) != background)
+                .count();
+            assert!(
+                logo_pixels > 100 * scale * scale,
+                "d77 logo did not render at scale {scale}"
+            );
+        }
+    }
+
+    #[test]
+    fn dashboard_actions_fit_without_scrolling() {
+        let (mut frost, _tasks) = Frost::new(iced_wayland_subscriber::shell::channel().1);
+        frost.snapshot.music = Some(crate::services::Music {
+            title: "A long example track title".into(),
+            artist: "An artist".into(),
+            album: "An album".into(),
+            playing: true,
+        });
+        frost.snapshot.volume = Some(Level {
+            percent: 40,
+            muted: false,
+        });
+        frost.snapshot.brightness = Some(Level {
+            percent: 60,
+            muted: false,
+        });
+        let renderer = Renderer::new(Font::DEFAULT, 16.0.into());
+        let mut element = frost.panel_view(Panel::Dashboard);
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(Size::ZERO, Size::new(420.0, 520.0)),
+        );
+        let panel = &node.children()[0];
+        let dashboard = &panel.children()[1];
+        let actions = dashboard.children().last().unwrap();
+        let bottom =
+            panel.bounds().y + dashboard.bounds().y + actions.bounds().y + actions.bounds().height;
+        assert!(
+            bottom <= 520.0,
+            "dashboard actions extend below the panel: {bottom}"
+        );
+    }
 
     #[test]
     fn renders_a_desktop_icon_and_a_wallpaper_thumbnail() {

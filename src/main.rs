@@ -148,7 +148,7 @@ impl Panel {
     fn placement(self) -> (u32, u32, Anchor) {
         match self {
             Self::Launcher => (520, 470, Anchor::Top | Anchor::Left),
-            Self::Dashboard => (420, 480, Anchor::Top | Anchor::Right),
+            Self::Dashboard => (420, 520, Anchor::Top | Anchor::Right),
             Self::Wallpaper => (550, 480, Anchor::Top | Anchor::Right),
             Self::Session => (310, 330, Anchor::Top | Anchor::Right),
         }
