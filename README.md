@@ -49,7 +49,7 @@ Add `~/.cargo/bin` to `PATH` if you want to call it simply as `frost`.
 | Wallpaper | `awww` or `swww` with its daemon running |
 | Dynamic palette | `matugen` (optional) |
 | Weather | `curl` and access to `wttr.in` (optional) |
-| Network menu | `nmtui` and a terminal; `TERMINAL` or `xdg-terminal-exec` is preferred |
+| Network menu | `nmtui` and a terminal; the configured terminal, `TERMINAL`, or `xdg-terminal-exec` is preferred |
 | Lock | `ext-session-lock-v1` and the `frost-locker` PAM policy |
 | Suspend, reboot, power off | `dbus-send` and logind/elogind |
 
@@ -93,7 +93,7 @@ The Wayland backend was adapted from [helium-locker](https://github.com/dani-77/
 
 ## Bar and icons
 
-The bar sits 10 logical pixels from the top and sides and has rounded corners. Click the power profile icon to cycle through daemon-advertised profiles. Scroll on the volume widget to adjust it; click to mute or unmute. Click the network widget to open `nmtui`. On narrow displays, indicators abbreviate and workspaces scroll horizontally.
+By default, the bar sits 10 logical pixels from the top and sides and is 40 logical pixels high. Click the power profile icon to cycle through daemon-advertised profiles. Scroll on the volume widget to adjust it; click to mute or unmute. Click the network widget to open `nmtui`. On narrow displays, indicators abbreviate and workspaces scroll horizontally. Hover over the power profile and cmus buttons for action hints.
 
 On Spitfire, Wasp, and Whiplash, the bar reads urgent state from `ext-workspace-v1` and occupancy from `$XDG_RUNTIME_DIR/d77-workspaces-$WAYLAND_DISPLAY`. Sway uses `urgent` and `representation`; Hyprland uses window counts; niri queries windows by workspace.
 
@@ -103,21 +103,26 @@ The launcher resolves `Icon=` through the configured GTK theme and then `hicolor
 
 ## Wallpaper and color
 
-`FROST_WALLPAPERS` sets the picker directory and should be an absolute path. On selection, Frost stores the choice in `${XDG_CACHE_HOME:-$HOME/.cache}/frost/wallpaper/current` and, if Matugen is installed, updates the shared `d77/palette.json` under the same cache root. Palette strength uses `~/.config/d77/theme-mix`, shared with the other shells, and can be changed in the picker. With no selected image, Frost shows a backdrop per output on the Bottom layer, with the owl emblem in the lower left corner. The compositor sizes it in logical coordinates, including at scales other than 1.
+`FROST_WALLPAPERS` sets the picker directory and should be an absolute path. On selection, Frost stores the choice in `${XDG_CACHE_HOME:-$HOME/.cache}/frost/wallpaper/current` and, if Matugen is installed, updates the shared `d77/palette.json` under the same cache root. The picker stays open and marks the selected image. Rapid selections are applied in sequence, with the final selection applied last. Palette strength uses `~/.config/d77/theme-mix`, shared with the other shells, and can be changed in the picker. With no selected image, Frost shows a backdrop per output on the Bottom layer, with the owl emblem in the lower left corner. The compositor sizes it in logical coordinates, including at scales other than 1.
 
 ```sh
 FROST_WALLPAPERS="$HOME/Pictures/Wallpapers" frost run
 ```
 
+## Configuration
+
+Copy [config.example.toml](config.example.toml) to `~/.config/frost/config.toml` and restart Frost. The `[bar]` section sets `height`, `margin`, and the visible `modules`. Module names are `launcher`, `workspaces`, `cpu`, `memory`, `network`, `power`, `volume`, `battery`, `clock`, and `actions`. The top-level `terminal` sets the executable used by `Terminal=true` applications and `nmtui`; `TERMINAL` and automatic detection remain fallbacks. `[weather].location` selects the location sent to wttr.in; leave it unset for automatic location.
+
 ## Current scope
 
-The bar is 40 logical pixels high. Panels and the OSD use the Overlay layer. Frost shows up to nine workspaces. IPC integrations expose a global workspace list; the Wayland protocol integration filters by output.
+Panels and the OSD use the Overlay layer. Frost shows up to nine workspaces. IPC integrations expose a global workspace list; the Wayland protocol integration filters by output.
 
 The picker uses an external wallpaper daemon. Greeter, tray, music picker, and Ollama are outside 0.1.
 
 ## Code
 
 - `src/main.rs`: Iced loop, surfaces, and state.
+- `src/config.rs`: TOML configuration and defaults.
 - `src/ui.rs`: widgets, colors, and views.
 - `src/services.rs`: XDG applications, compositor IPC, and system services.
 - `src/ipc.rs`: local session socket and single instance.

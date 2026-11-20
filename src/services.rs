@@ -482,10 +482,21 @@ pub async fn music_action(action: &str) -> Result<String, String> {
     }
 }
 
-pub async fn weather() -> Option<String> {
+pub async fn weather(location: Option<&str>) -> Option<String> {
+    let location = location.unwrap_or_default();
+    let encoded: String = location
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect();
+    let url = format!("https://wttr.in/{encoded}?format=3");
     let text = command_with_timeout(
         "curl",
-        &["-fsS", "--max-time", "6", "https://wttr.in/?format=3"],
+        &["-fsS", "--max-time", "6", &url],
         Duration::from_secs(7),
     )
     .await
@@ -747,7 +758,10 @@ pub async fn open_nmtui() -> Result<String, String> {
 }
 
 fn spawn_in_terminal(argv: &[String]) -> Result<String, String> {
-    let preferred = env::var("TERMINAL").ok().filter(|name| executable(name));
+    let preferred = crate::config::Config::load()
+        .terminal
+        .filter(|name| executable(name))
+        .or_else(|| env::var("TERMINAL").ok().filter(|name| executable(name)));
     let program = preferred
         .or_else(|| {
             [
@@ -878,52 +892,51 @@ pub async fn apply_wallpaper(path: PathBuf) -> Result<String, String> {
     let path_str = path.to_str().ok_or("Wallpaper path must be valid UTF-8")?;
     let cli = if executable("awww") { "awww" } else { "swww" };
     command(cli, &["img", path_str]).await?;
+    write_wallpaper_state(path_str)?;
+    generate_palette(&path).await?;
+    Ok(String::new())
+}
+
+fn write_wallpaper_state(value: &str) -> Result<(), String> {
     let state = wallpaper_state().ok_or("Missing cache directory")?;
     fs::create_dir_all(state.parent().unwrap()).map_err(|err| err.to_string())?;
-    fs::write(state, path_str).map_err(|err| err.to_string())?;
-    generate_palette(&path).await;
-    Ok(String::new())
+    let next = state.with_extension("next");
+    fs::write(&next, value).map_err(|err| err.to_string())?;
+    fs::rename(next, state).map_err(|err| err.to_string())
 }
 
 pub async fn clear_wallpaper() -> Result<String, String> {
     let cli = if executable("awww") { "awww" } else { "swww" };
     command(cli, &["clear"]).await?;
-    if let Some(state) = wallpaper_state() {
-        fs::create_dir_all(state.parent().unwrap()).map_err(|err| err.to_string())?;
-        fs::write(state, "").map_err(|err| err.to_string())?;
-    }
+    write_wallpaper_state("")?;
     Ok(String::new())
 }
 
-async fn generate_palette(path: &Path) {
+async fn generate_palette(path: &Path) -> Result<(), String> {
     if !executable("matugen") {
-        return;
+        return Ok(());
     }
-    let Some(cache) = cache_dir() else {
-        return;
-    };
+    let cache = cache_dir().ok_or("Missing cache directory")?;
     let frost = cache.join("frost/matugen");
     let shared = cache.join("d77");
-    if fs::create_dir_all(&frost).is_err() || fs::create_dir_all(&shared).is_err() {
-        return;
-    }
+    fs::create_dir_all(&frost).map_err(|err| err.to_string())?;
+    fs::create_dir_all(&shared).map_err(|err| err.to_string())?;
     let template = frost.join("d77-palette.json");
     let config = frost.join("matugen.toml");
-    let output = shared.join("palette.json.tmp");
-    if fs::write(&template, include_str!("../assets/d77-palette.json")).is_err() {
-        return;
-    }
+    let output = frost.join("palette.json.next");
+    let _ = fs::remove_file(&output);
+    fs::write(&template, include_str!("../assets/d77-palette.json"))
+        .map_err(|err| err.to_string())?;
     let toml = format!(
         "[config]\n[config.custom_colors]\ngreen = \"#9ece6a\"\nyellow = \"#e0af68\"\norange = \"#ff9e64\"\n[templates.d77]\ninput_path = {:?}\noutput_path = {:?}\n",
         template.display().to_string(),
         output.display().to_string()
     );
-    if fs::write(&config, toml).is_err() {
-        return;
-    }
+    fs::write(&config, toml).map_err(|err| err.to_string())?;
     let status = tokio::time::timeout(
         Duration::from_secs(20),
         tokio::process::Command::new("matugen")
+            .kill_on_drop(true)
             .arg("-c")
             .arg(&config)
             .arg("image")
@@ -940,7 +953,12 @@ async fn generate_palette(path: &Path) {
             .status(),
     )
     .await;
-    if matches!(status, Ok(Ok(status)) if status.success()) {
-        let _ = fs::rename(output, shared.join("palette.json"));
+    match status {
+        Ok(Ok(status)) if status.success() => {
+            fs::rename(output, shared.join("palette.json")).map_err(|err| err.to_string())
+        }
+        Ok(Ok(status)) => Err(format!("Matugen exited with {status}")),
+        Ok(Err(err)) => Err(format!("Could not start Matugen: {err}")),
+        Err(_) => Err("Matugen timed out".into()),
     }
 }

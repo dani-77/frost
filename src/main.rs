@@ -1,3 +1,4 @@
+mod config;
 mod ipc;
 mod lock;
 mod media;
@@ -36,9 +37,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-const BAR_HEIGHT: u32 = 40;
-const BAR_MARGIN: i32 = 10;
 const LAUNCHER_INPUT: &str = "frost-search";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WallpaperChoice {
+    Image(PathBuf),
+    Clear,
+}
 
 const HELP: &str = "Usage: frost [run | launcher | dashboard | wallpaper | session | close | lock |
               volume-up | volume-down | volume-mute | brightness-up | brightness-down]";
@@ -63,6 +68,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "-V" | "--version" => println!("frost {}", env!("CARGO_PKG_VERSION")),
         "lock" => lock::run()?,
         "run" => {
+            let config = config::Config::load();
             let socket = ipc::Socket::bind()?;
             let (shell_broadcast, shell_events) = shell::channel();
             daemon(
@@ -74,14 +80,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .wl_settings(ExWlSettings {
                 shell_broadcast,
                 layer_settings: LayerShellSettings {
-                    size: LayerSize::fill_width(BAR_HEIGHT),
+                    size: LayerSize::fill_width(config.bar.height),
                     anchor: Anchor::Top | Anchor::Left | Anchor::Right,
-                    exclusive_zone: BAR_HEIGHT as i32,
+                    exclusive_zone: config.bar.height as i32,
                     margin: Margin {
-                        top: BAR_MARGIN,
-                        right: BAR_MARGIN,
+                        top: config.bar.margin,
+                        right: config.bar.margin,
                         bottom: 0,
-                        left: BAR_MARGIN,
+                        left: config.bar.margin,
                     },
                     layer: Layer::Top,
                     keyboard_interactivity: KeyboardInteractivity::None,
@@ -251,6 +257,7 @@ enum Message {
     Music(&'static str),
     Wallpaper(PathBuf),
     WallpaperClear,
+    WallpaperDone(WallpaperChoice, Result<String, String>),
     ThemeMix(f32),
     Session(Session),
     Confirm(Session),
@@ -260,6 +267,7 @@ enum Message {
 }
 
 struct Frost {
+    config: config::Config,
     compositor: Compositor,
     shell_events: ShellReceiver,
     native_workspaces: Option<Arc<WorkspaceSnapshot>>,
@@ -276,6 +284,8 @@ struct Frost {
     query: String,
     selected: usize,
     wallpaper_files: Vec<PathBuf>,
+    wallpaper_target: Option<WallpaperChoice>,
+    wallpaper_busy: bool,
     thumbnails: Vec<Option<image::Handle>>,
     thumbnail_job: Option<iced::task::Handle>,
     cpu_usage: Option<u16>,
@@ -303,6 +313,7 @@ struct Frost {
 impl Frost {
     fn new(shell_events: ShellReceiver) -> (Self, Task<Message>) {
         let mut frost = Self {
+            config: config::Config::load(),
             compositor: Compositor::detect(),
             shell_events,
             native_workspaces: None,
@@ -319,6 +330,8 @@ impl Frost {
             query: String::new(),
             selected: 0,
             wallpaper_files: Vec::new(),
+            wallpaper_target: None,
+            wallpaper_busy: false,
             thumbnails: Vec::new(),
             thumbnail_job: None,
             cpu_usage: None,
@@ -433,7 +446,11 @@ impl Frost {
             return Task::none();
         }
         self.weather_pending = true;
-        Task::perform(services::weather(), Message::Weather)
+        let location = self.config.weather.location.clone();
+        Task::perform(
+            async move { services::weather(location.as_deref()).await },
+            Message::Weather,
+        )
     }
 
     fn matches(&self) -> impl Iterator<Item = &App> {
@@ -451,7 +468,9 @@ impl Frost {
         match message {
             Message::Tick => {
                 self.clock = chrono::Local::now();
-                self.palette = ui::Palette::load();
+                if !self.wallpaper_busy {
+                    self.palette = ui::Palette::load();
+                }
                 Task::batch([
                     self.poll(),
                     self.poll_bar(),
@@ -704,12 +723,36 @@ impl Frost {
                 async move { services::music_action(flag).await },
                 |result| Message::Finished(result, None),
             ),
-            Message::Wallpaper(path) => Task::perform(services::apply_wallpaper(path), |result| {
-                Message::Finished(result, Some("Wallpaper applied"))
-            }),
-            Message::WallpaperClear => Task::perform(services::clear_wallpaper(), |result| {
-                Message::Finished(result, Some("Wallpaper cleared"))
-            }),
+            Message::Wallpaper(path) => {
+                self.wallpaper_target = Some(WallpaperChoice::Image(path));
+                self.next_wallpaper()
+            }
+            Message::WallpaperClear => {
+                self.wallpaper_target = Some(WallpaperChoice::Clear);
+                self.next_wallpaper()
+            }
+            Message::WallpaperDone(choice, result) => {
+                self.wallpaper_busy = false;
+                let backdrops = self.reconcile_backdrops();
+                if self.wallpaper_target.as_ref() != Some(&choice) {
+                    return Task::batch([backdrops, self.next_wallpaper()]);
+                }
+                self.wallpaper_target = None;
+                self.palette = ui::Palette::load();
+                let notice = match result {
+                    Ok(_) => self.show_notice(Notice {
+                        title: match choice {
+                            WallpaperChoice::Image(_) => "Wallpaper applied",
+                            WallpaperChoice::Clear => "Wallpaper cleared",
+                        }
+                        .into(),
+                        detail: String::new(),
+                        level: None,
+                    }),
+                    Err(err) => self.error(err),
+                };
+                Task::batch([backdrops, notice])
+            }
             Message::ThemeMix(value) => {
                 if let Err(err) = services::save_theme_mix(value) {
                     return self.error(err);
@@ -798,6 +841,26 @@ impl Frost {
                 )
             },
             move |result| Message::Adjusted(control, result),
+        )
+    }
+
+    fn next_wallpaper(&mut self) -> Task<Message> {
+        if self.wallpaper_busy {
+            return Task::none();
+        }
+        let Some(choice) = self.wallpaper_target.clone() else {
+            return Task::none();
+        };
+        self.wallpaper_busy = true;
+        Task::perform(
+            async move {
+                let result = match &choice {
+                    WallpaperChoice::Image(path) => services::apply_wallpaper(path.clone()).await,
+                    WallpaperChoice::Clear => services::clear_wallpaper().await,
+                };
+                (choice, result)
+            },
+            |(choice, result)| Message::WallpaperDone(choice, result),
         )
     }
 
@@ -1011,5 +1074,30 @@ impl Frost {
         } else {
             self.bar_view(id)
         }
+    }
+}
+
+#[cfg(test)]
+mod wallpaper_tests {
+    use super::*;
+
+    #[test]
+    fn rapid_selections_finish_with_the_last_wallpaper() {
+        let (mut frost, _) = Frost::new(shell::channel().1);
+        let first = WallpaperChoice::Image(PathBuf::from("first.png"));
+        let last = WallpaperChoice::Image(PathBuf::from("last.png"));
+
+        let _ = frost.update(Message::Wallpaper(PathBuf::from("first.png")));
+        let _ = frost.update(Message::Wallpaper(PathBuf::from("last.png")));
+        assert_eq!(frost.wallpaper_target, Some(last.clone()));
+        assert!(frost.wallpaper_busy);
+
+        let _ = frost.update(Message::WallpaperDone(first, Ok(String::new())));
+        assert_eq!(frost.wallpaper_target, Some(last.clone()));
+        assert!(frost.wallpaper_busy);
+
+        let _ = frost.update(Message::WallpaperDone(last, Ok(String::new())));
+        assert_eq!(frost.wallpaper_target, None);
+        assert!(!frost.wallpaper_busy);
     }
 }

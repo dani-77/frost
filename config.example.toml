@@ -1,0 +1,13 @@
+# Copy this file to ~/.config/frost/config.toml and restart Frost.
+terminal = "foot"
+
+[bar]
+height = 40
+margin = 10
+modules = [
+  "launcher", "workspaces", "cpu", "memory", "network",
+  "power", "volume", "battery", "clock", "actions",
+]
+
+[weather]
+location = "Lisbon"

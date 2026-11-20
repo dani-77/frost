@@ -1,3 +1,4 @@
+use super::hint;
 use super::{Palette, heading, icon, percent, shortened};
 use crate::{
     Frost, Message, Panel,
@@ -78,6 +79,7 @@ impl Frost {
 
     fn bar_layout(&self, id: Id, width: f32) -> Element<'_, Message> {
         let p = self.palette;
+        let show = |module| self.config.bar.shows(module);
         let active = |panel| self.panel.is_some_and(|(current, _)| current == panel);
         let panel = |glyph, color, panel| panel_button(p, glyph, color, panel, active(panel));
         let divider = || {
@@ -219,7 +221,7 @@ impl Frost {
         } else {
             String::new()
         };
-        let power = p
+        let power_button = p
             .button(
                 indicator(power_glyph, power_label, power_color, p.foreground),
                 false,
@@ -229,11 +231,33 @@ impl Frost {
                 (!self.power_pending && self.power.as_ref().is_some_and(|state| state.can_cycle()))
                     .then_some(Message::CyclePower),
             );
+        let power = hint(
+            power_button,
+            self.power.as_ref().map_or_else(
+                || "Power profile unavailable".to_owned(),
+                |power| format!("{} · click to cycle", power.active.label()),
+            ),
+            p,
+            iced::widget::tooltip::Position::Bottom,
+        );
         let compact = width < 650.0;
-        let mut status = row![cpu, ram, network, power]
+        let mut status = row![]
             .spacing(if compact { 6 } else { 10 })
             .align_y(Alignment::Center);
-        if width >= 900.0
+        if show("cpu") {
+            status = status.push(cpu);
+        }
+        if show("memory") {
+            status = status.push(ram);
+        }
+        if show("network") {
+            status = status.push(network);
+        }
+        if show("power") {
+            status = status.push(power);
+        }
+        if show("volume")
+            && width >= 900.0
             && let Some(level) = self.snapshot.volume
         {
             let (glyph, color) = if level.muted {
@@ -263,7 +287,9 @@ impl Frost {
                 }),
             );
         }
-        if let Some(battery) = self.snapshot.battery {
+        if show("battery")
+            && let Some(battery) = self.snapshot.battery
+        {
             let glyph = match battery.status {
                 crate::services::BatteryStatus::Charging => "󰂄",
                 _ => match battery.percent {
@@ -321,30 +347,39 @@ impl Frost {
             .width(24)
             .height(24)
             .content_fit(ContentFit::Contain);
-        container(
-            row![
-                panel_button_content(
-                    crystal.into(),
-                    p.ice,
-                    Panel::Launcher,
-                    active(Panel::Launcher)
-                ),
-                divider(),
-                workspaces,
-                status,
-                divider(),
-                clock,
-                actions,
-            ]
+        let mut bar = row![]
             .spacing(if compact { 5 } else { 9 })
-            .align_y(Alignment::Center),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_y(Alignment::Center)
-        .padding([0, if compact { 6 } else { 9 }])
-        .style(move |_| p.tile(p.background, 17.0))
-        .into()
+            .align_y(Alignment::Center);
+        if show("launcher") {
+            bar = bar.push(panel_button_content(
+                crystal.into(),
+                p.ice,
+                Panel::Launcher,
+                active(Panel::Launcher),
+            ));
+        }
+        if show("workspaces") {
+            if show("launcher") {
+                bar = bar.push(divider());
+            }
+            bar = bar.push(workspaces);
+        } else {
+            bar = bar.push(Space::new().width(Length::Fill));
+        }
+        bar = bar.push(status);
+        if show("clock") {
+            bar = bar.push(divider()).push(clock);
+        }
+        if show("actions") {
+            bar = bar.push(actions);
+        }
+        container(bar)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(Alignment::Center)
+            .padding([0, if compact { 6 } else { 9 }])
+            .style(move |_| p.tile(p.background, 17.0))
+            .into()
     }
 }
 
@@ -395,7 +430,7 @@ mod tests {
         let theme = frost.palette.theme();
 
         for width in [600_u32, 1040] {
-            let height = crate::BAR_HEIGHT;
+            let height = frost.config.bar.height;
             let viewport = Viewport::with_physical_size(Size::new(width, height), 1.0);
             let mut renderer = iced::Renderer::Secondary(Renderer::new(Font::DEFAULT, 16.0.into()));
             let mut ui = UserInterface::build(

@@ -10,7 +10,7 @@ use iced::{
     theme::Palette as IcedPalette,
     widget::{
         Space, button, column, container, image, progress_bar, row, scrollable, slider, stack, svg,
-        text, text_input,
+        text, text_input, tooltip,
     },
 };
 use std::{env, fs, path::PathBuf};
@@ -156,6 +156,20 @@ impl Palette {
             .on_press(message)
     }
 
+    fn icon_action(
+        self,
+        glyph: &'static str,
+        color: Color,
+        message: Message,
+    ) -> button::Button<'static, Message> {
+        self.button(
+            container(icon(glyph, 18, color)).center_x(38).center_y(30),
+            false,
+        )
+        .padding(0)
+        .on_press(message)
+    }
+
     fn workspace<'a>(
         self,
         label: String,
@@ -237,6 +251,19 @@ fn icon(glyph: &'static str, size: u32, color: Color) -> text::Text<'static> {
         .font(crate::media::ICON_FONT)
         .size(size)
         .color(color)
+}
+
+fn hint<'a>(
+    content: impl Into<Element<'a, Message>>,
+    label: impl Into<String>,
+    palette: Palette,
+    position: tooltip::Position,
+) -> Element<'a, Message> {
+    tooltip(content, text(label.into()).size(12), position)
+        .padding(6)
+        .delay(std::time::Duration::from_millis(450))
+        .style(move |_| palette.tile(palette.surface, 6.0))
+        .into()
 }
 
 fn themed_icon(path: Option<&std::path::Path>, fallback: Color) -> Element<'static, Message> {
@@ -483,19 +510,40 @@ impl Frost {
                 heading(shortened(&music.title, 37), 15),
                 p.label(shortened(&music.artist, 48)),
                 row![
-                    p.button(icon("󰑟", 18, p.foreground), false)
-                        .on_press(Message::Music("album-prev")),
-                    p.button(icon("󰒮", 18, p.foreground), false)
-                        .on_press(Message::Music("-r")),
-                    p.button(
-                        icon(if music.playing { "󰏤" } else { "󰐊" }, 18, p.ice),
-                        false
-                    )
-                    .on_press(Message::Music("-u")),
-                    p.button(icon("󰒭", 18, p.foreground), false)
-                        .on_press(Message::Music("-n")),
-                    p.button(icon("󰈑", 18, p.foreground), false)
-                        .on_press(Message::Music("album-next")),
+                    hint(
+                        p.icon_action("󰑟", p.foreground, Message::Music("album-prev")),
+                        "Previous album",
+                        p,
+                        tooltip::Position::Top
+                    ),
+                    hint(
+                        p.icon_action("󰒮", p.foreground, Message::Music("-r")),
+                        "Previous track",
+                        p,
+                        tooltip::Position::Top
+                    ),
+                    hint(
+                        p.icon_action(
+                            if music.playing { "󰏤" } else { "󰐊" },
+                            p.ice,
+                            Message::Music("-u"),
+                        ),
+                        if music.playing { "Pause" } else { "Play" },
+                        p,
+                        tooltip::Position::Top
+                    ),
+                    hint(
+                        p.icon_action("󰒭", p.foreground, Message::Music("-n")),
+                        "Next track",
+                        p,
+                        tooltip::Position::Top
+                    ),
+                    hint(
+                        p.icon_action("󰈑", p.foreground, Message::Music("album-next")),
+                        "Next album",
+                        p,
+                        tooltip::Position::Top
+                    ),
                 ]
                 .spacing(4),
             ]
@@ -541,6 +589,11 @@ impl Frost {
 
     fn wallpaper(&self) -> Element<'_, Message> {
         let p = self.palette;
+        let selected = match &self.wallpaper_target {
+            Some(crate::WallpaperChoice::Image(path)) => Some(path.clone()),
+            Some(crate::WallpaperChoice::Clear) => None,
+            None => crate::services::active_wallpaper(),
+        };
         let folder = crate::services::wallpaper_dir()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "Set FROST_WALLPAPERS to the wallpaper directory".into());
@@ -548,6 +601,7 @@ impl Frost {
         for (row_index, paths) in self.wallpaper_files.chunks(3).enumerate() {
             let mut tiles = row![].spacing(7);
             for (column_index, path) in paths.iter().enumerate() {
+                let active = selected.as_ref() == Some(path);
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
                 let preview = self
                     .thumbnails
@@ -569,9 +623,29 @@ impl Frost {
                     .align_x(Alignment::Center)
                     .width(Length::Fill);
                 tiles = tiles.push(
-                    p.button(tile, false)
+                    button(tile)
                         .padding(5)
                         .width(Length::FillPortion(1))
+                        .style(move |_, status| {
+                            let hovered =
+                                matches!(status, button::Status::Hovered | button::Status::Pressed);
+                            button::Style {
+                                background: Some(if active {
+                                    p.elevated.into()
+                                } else if hovered {
+                                    p.surface.into()
+                                } else {
+                                    Color::TRANSPARENT.into()
+                                }),
+                                text_color: p.foreground,
+                                border: Border {
+                                    color: if active { p.ice } else { p.line },
+                                    width: if active || hovered { 2.0 } else { 0.0 },
+                                    radius: 8.0.into(),
+                                },
+                                ..Default::default()
+                            }
+                        })
                         .on_press(Message::Wallpaper(path.clone())),
                 );
             }
