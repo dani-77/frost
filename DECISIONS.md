@@ -27,3 +27,9 @@
 - Volume and brightness sliders apply the latest requested value in sequence, so a rapid drag cannot leave an older value applied last.
 - The launcher honors `Terminal=true` desktop entries. It and the `nmtui` button resolve a terminal in the same order: Frost config, `TERMINAL`, `xdg-terminal-exec`, then installed terminals.
 - `~/.config/frost/config.toml` can set bar height and margin, visible bar modules, terminal executable, and weather location. Defaults preserve the original layout, and the configured terminal takes priority over `TERMINAL`.
+
+## Installation
+
+- The Makefile builds a locked release binary as the regular user, then installs the binary under `$(PREFIX)/bin`. `DESTDIR` supports package staging.
+- The locker requires a root-owned policy at `/etc/pam.d/frost-locker`. The Makefile selects `void`, `arch`, `debian`, or `chimera` from `/etc/os-release`, including hybrid-d77 through `ID_LIKE`; `PAM_VARIANT` overrides the detected value. Chimera follows hybrid-d77's Utumno policy with `pam_unix.so` and adds an account rule because Frost calls `pam_acct_mgmt`. The example config and license texts are installed under `$(PREFIX)/share`.
+- Runtime art, the Matugen template, and the icon font are embedded in the binary, so the system-wide install does not need a separate assets directory.

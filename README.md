@@ -38,6 +38,15 @@ cargo install --locked --path .
 
 Add `~/.cargo/bin` to `PATH` if you want to call it simply as `frost`.
 
+For a system-wide install, build as your regular user and then install as root:
+
+```sh
+make
+sudo make install
+```
+
+This installs `/usr/bin/frost`, a PAM policy at `/etc/pam.d/frost-locker`, the example configuration at `/usr/share/frost/config.example.toml`, and the licenses under `/usr/share/licenses/frost`. The Makefile detects Void, Arch, Debian derivatives, and Chimera (including hybrid-d77 through `ID_LIKE`) from `/etc/os-release`. Override the choice when staging for another system, for example `make install DESTDIR=/tmp/frost-package PAM_VARIANT=chimera`. The Chimera policy follows hybrid-d77's local `pam_unix.so` authentication and adds the account rule required by Frost. `PREFIX` defaults to `/usr`; `DESTDIR` stages an install for packaging. Run `sudo make uninstall` to remove the installed files. If `~/.cargo/bin` precedes `/usr/bin` in `PATH`, `frost` still resolves to the user-installed copy; check with `command -v frost`.
+
 | Integration | Runtime dependency |
 | --- | --- |
 | Launcher | `gio` |
@@ -76,14 +85,14 @@ The same commands work with other compositors. `frost close` closes the open pan
 
 ## Locker
 
-On Void Linux, install the project's PAM policy:
+If you installed Frost with Cargo, install the PAM policy separately on Void Linux:
 
 ```sh
 sudo install -o root -g root -m 0644 pam.d/frost-locker.void /etc/pam.d/frost-locker
 ~/.cargo/bin/frost lock
 ```
 
-On Debian derivatives, use `pam.d/frost-locker.debian` at the same destination. The policy uses the distribution's authentication and account stacks. The locker refuses to start if the PAM file is missing, is owned by a non-root user, or is writable by its group or others. PAM can request one interactive password prompt per attempt. Install and test the policy in a nested compositor before using it in your main session.
+On Arch Linux, Debian derivatives, or Chimera Linux, use the matching file in `pam.d/` at the same destination. `make install PAM_VARIANT=...` handles the policy automatically. Void and Arch include the distribution's `system-auth` stack, Debian includes `common-auth` and `common-account`, and Chimera uses `pam_unix.so` for local users. The locker refuses to start if the PAM file is missing, is owned by a non-root user, or is writable by its group or others. PAM can request one interactive password prompt per attempt. Install and test the policy in a nested compositor before using it in your main session.
 
 The process waits for the compositor's `locked` confirmation before accepting a password. The keyboard is connected before the lock request. An opaque surface covers every output, including outputs added while locked. The Iced view receives only the character count and authentication state. The password buffer is zeroed in memory and protected from swap with `mlock` when possible. Enter submits, Backspace deletes the last character, and Esc clears the field.
 
@@ -123,6 +132,7 @@ The picker uses an external wallpaper daemon. Greeter, tray, music picker, and O
 
 - `src/main.rs`: Iced loop, surfaces, and state.
 - `src/config.rs`: TOML configuration and defaults.
+- `Makefile`: release build and system-wide install.
 - `src/ui.rs`: widgets, colors, and views.
 - `src/services.rs`: XDG applications, compositor IPC, and system services.
 - `src/ipc.rs`: local session socket and single instance.
