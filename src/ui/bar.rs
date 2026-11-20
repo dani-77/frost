@@ -293,7 +293,7 @@ impl Frost {
                         tone,
                         p.foreground,
                     ),
-                    self.battery_show_time && battery.remaining_minutes.is_some(),
+                    false,
                 )
                 .padding([4, 5])
                 .on_press_maybe(
