@@ -30,7 +30,7 @@ optdepends=(
   'curl: weather forecast'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('4fd843105ecd8f468058339bc3e3b9508f0a6e6f04a9870073b0eab602277df3')
 
 prepare() {
     cd "frost-$pkgver"

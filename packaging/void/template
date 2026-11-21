@@ -11,7 +11,7 @@ maintainer="Daniel Azevedo <daniazevedo77@posteo.net>"
 license="MIT"
 homepage="https://github.com/dani-77/frost"
 distfiles="https://github.com/dani-77/frost/archive/refs/tags/v${version}.tar.gz"
-checksum=SKIP
+checksum=4fd843105ecd8f468058339bc3e3b9508f0a6e6f04a9870073b0eab602277df3
 repository=d77
 conf_files="/etc/pam.d/frost-locker"
 
