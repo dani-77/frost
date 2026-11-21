@@ -116,7 +116,7 @@ impl Frost {
                 .and_then(|output| snapshot.group_for_output(*output))
         {
             use iced_wayland_subscriber::workspace::{State, WorkspaceCapabilities};
-            let counts = crate::services::native_window_counts();
+            let counts = self.window_counts.as_ref();
             let mut workspaces: Vec<_> = snapshot
                 .workspaces_in(&group.id)
                 .filter(|workspace| !workspace.state.contains(State::Hidden))
@@ -133,7 +133,6 @@ impl Frost {
                     .contains(WorkspaceCapabilities::Activate)
                     .then(|| Message::NativeActivate(workspace.id.clone()));
                 let occupied = counts
-                    .as_ref()
                     .and_then(|counts| workspace.protocol_id.as_ref().and_then(|id| counts.get(id)))
                     .is_none_or(|count| *count > 0);
                 workspaces_row = workspaces_row.push(

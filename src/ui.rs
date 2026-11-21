@@ -34,6 +34,14 @@ pub struct Palette {
 
 impl Palette {
     pub fn load() -> Self {
+        Self::resolve(
+            crate::services::active_wallpaper().as_deref(),
+            crate::services::theme_mix(),
+        )
+    }
+
+    /// Builds the palette for an already known wallpaper and theme mix.
+    pub fn resolve(wallpaper: Option<&std::path::Path>, mix: f32) -> Self {
         let mut palette = Self {
             background: rgb(0x101822),
             surface: rgb(0x172331),
@@ -57,11 +65,8 @@ impl Palette {
             .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok());
         if let Some(data) = data
             && data.get("source").and_then(|value| value.as_str())
-                == crate::services::active_wallpaper()
-                    .as_deref()
-                    .and_then(|path| path.to_str())
+                == wallpaper.and_then(|path| path.to_str())
         {
-            let mix = crate::services::theme_mix();
             let color = |key: &str, fallback: Color| {
                 data.get(key)
                     .and_then(|value| value.as_str())
@@ -592,7 +597,7 @@ impl Frost {
         let selected = match &self.wallpaper_target {
             Some(crate::WallpaperChoice::Image(path)) => Some(path.clone()),
             Some(crate::WallpaperChoice::Clear) => None,
-            None => crate::services::active_wallpaper(),
+            None => self.active_wallpaper.clone(),
         };
         let folder = crate::services::wallpaper_dir()
             .map(|path| path.display().to_string())
@@ -665,12 +670,12 @@ impl Frost {
             .align_y(Alignment::Center),
             row![
                 p.label("Theme mix"),
-                slider(0.0..=1.0, crate::services::theme_mix(), Message::ThemeMix)
+                slider(0.0..=1.0, self.theme_mix, Message::ThemeMix)
                     .step(0.01_f32)
                     .width(Length::Fill),
                 p.label(format!(
                     "{}%",
-                    (crate::services::theme_mix() * 100.0).round() as u32
+                    (self.theme_mix * 100.0).round() as u32
                 ))
             ]
             .spacing(8)

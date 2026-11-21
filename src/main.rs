@@ -278,6 +278,10 @@ struct Frost {
     notice: Option<(Notice, Id)>,
     notice_generation: u64,
     palette: ui::Palette,
+    /// File-backed state, refreshed on each tick so views never touch disk.
+    active_wallpaper: Option<PathBuf>,
+    theme_mix: f32,
+    window_counts: Option<HashMap<String, u32>>,
     confirm: Option<Session>,
     apps: Vec<App>,
     loading_apps: bool,
@@ -324,6 +328,9 @@ impl Frost {
             notice: None,
             notice_generation: 0,
             palette: ui::Palette::load(),
+            active_wallpaper: None,
+            theme_mix: 1.0,
+            window_counts: None,
             confirm: None,
             apps: Vec::new(),
             loading_apps: false,
@@ -355,6 +362,7 @@ impl Frost {
             refreshing: false,
             clock: chrono::Local::now(),
         };
+        frost.refresh_files();
         let poll = Task::batch([frost.poll(), frost.poll_bar()]);
         (frost, poll)
     }
@@ -468,9 +476,7 @@ impl Frost {
         match message {
             Message::Tick => {
                 self.clock = chrono::Local::now();
-                if !self.wallpaper_busy {
-                    self.palette = ui::Palette::load();
-                }
+                self.refresh_files();
                 Task::batch([
                     self.poll(),
                     self.poll_bar(),
@@ -733,12 +739,12 @@ impl Frost {
             }
             Message::WallpaperDone(choice, result) => {
                 self.wallpaper_busy = false;
+                self.refresh_files();
                 let backdrops = self.reconcile_backdrops();
                 if self.wallpaper_target.as_ref() != Some(&choice) {
                     return Task::batch([backdrops, self.next_wallpaper()]);
                 }
                 self.wallpaper_target = None;
-                self.palette = ui::Palette::load();
                 let notice = match result {
                     Ok(_) => self.show_notice(Notice {
                         title: match choice {
@@ -757,7 +763,7 @@ impl Frost {
                 if let Err(err) = services::save_theme_mix(value) {
                     return self.error(err);
                 }
-                self.palette = ui::Palette::load();
+                self.refresh_files();
                 Task::none()
             }
             Message::Session(Session::Lock) => {
@@ -806,6 +812,21 @@ impl Frost {
                 .take()
                 .map_or_else(Task::none, |(_, id)| window::close(id)),
             _ => Task::none(),
+        }
+    }
+
+    /// Re-reads the small state files shared with the other d77 shells.
+    fn refresh_files(&mut self) {
+        self.active_wallpaper = services::active_wallpaper();
+        self.theme_mix = services::theme_mix();
+        self.window_counts = if self.native_workspaces.is_some() {
+            services::native_window_counts()
+        } else {
+            None
+        };
+        // Keep the palette steady while a wallpaper job rewrites palette.json.
+        if !self.wallpaper_busy {
+            self.palette = ui::Palette::resolve(self.active_wallpaper.as_deref(), self.theme_mix);
         }
     }
 
@@ -1031,7 +1052,7 @@ impl Frost {
     }
 
     fn reconcile_backdrops(&mut self) -> Task<Message> {
-        if services::active_wallpaper().is_some() {
+        if self.active_wallpaper.is_some() {
             return Task::batch(self.backdrops.drain().map(|(_, id)| window::close(id)));
         }
         let missing: Vec<_> = self
