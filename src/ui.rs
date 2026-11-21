@@ -303,6 +303,25 @@ fn heading(value: impl Into<String>, size: u32) -> text::Text<'static> {
     })
 }
 
+/// The time locale from LC_ALL, LC_TIME or LANG, for day and month names.
+pub(crate) fn time_locale() -> chrono::Locale {
+    static LOCALE: std::sync::OnceLock<chrono::Locale> = std::sync::OnceLock::new();
+    *LOCALE.get_or_init(|| {
+        ["LC_ALL", "LC_TIME", "LANG"]
+            .into_iter()
+            .filter_map(|name| env::var(name).ok())
+            .find(|value| !value.is_empty())
+            .and_then(|value| parse_locale(&value))
+            .unwrap_or(chrono::Locale::POSIX)
+    })
+}
+
+fn parse_locale(value: &str) -> Option<chrono::Locale> {
+    // "pt_PT.UTF-8@euro" -> "pt_PT"
+    let name = value.split(['.', '@']).next()?;
+    chrono::Locale::try_from(name).ok()
+}
+
 fn shortened(value: &str, length: usize) -> String {
     let mut chars = value.chars();
     let mut output: String = chars.by_ref().take(length).collect();
@@ -751,6 +770,24 @@ impl Frost {
             .align_y(Alignment::Center)
             .style(move |_| p.tile(p.surface, 12.0))
             .into()
+    }
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use super::*;
+
+    #[test]
+    fn locale_names_accept_encoding_and_modifier_suffixes() {
+        assert_eq!(parse_locale("pt_PT.UTF-8"), Some(chrono::Locale::pt_PT));
+        assert_eq!(parse_locale("de_DE@euro"), Some(chrono::Locale::de_DE));
+        assert_eq!(parse_locale("C.UTF-8"), None);
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 11, 21).unwrap();
+        assert_eq!(
+            date.format_localized("%A, %d %B", chrono::Locale::pt_PT)
+                .to_string(),
+            "sábado, 21 novembro"
+        );
     }
 }
 

@@ -27,7 +27,9 @@ impl ViewState {
             return false;
         }
         self.clock = clock;
-        self.date = now.format("%A, %d %B").to_string();
+        self.date = now
+            .format_localized("%A, %d %B", crate::ui::time_locale())
+            .to_string();
         true
     }
 

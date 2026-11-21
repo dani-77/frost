@@ -330,7 +330,9 @@ impl Frost {
             );
         }
         let clock = if width >= 970.0 {
-            self.clock.format("%a %d %b  %H:%M").to_string()
+            self.clock
+                .format_localized("%a %d %b  %H:%M", crate::ui::time_locale())
+                .to_string()
         } else {
             self.clock.format("%H:%M").to_string()
         };
