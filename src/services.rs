@@ -337,7 +337,10 @@ fn brightness_at(path: &Path) -> Option<Level> {
             .ok()
     };
     let max = value("max_brightness").filter(|max| *max > 0)?;
-    let current = value("actual_brightness").or_else(|| value("brightness"))?;
+    // `brightness` is the requested level, as brightnessctl reports it.
+    // `actual_brightness` can lag behind a change, which made the slider
+    // snap back to the previous value right after each step.
+    let current = value("brightness")?;
     Some(Level {
         percent: ((current.min(max) * 100 + max / 2) / max) as u16,
         muted: false,
@@ -678,8 +681,9 @@ mod battery_tests {
         fs::write(path.join("max_brightness"), "19393\n").unwrap();
         fs::write(path.join("brightness"), "9696\n").unwrap();
         assert_eq!(brightness_at(&path).map(|level| level.percent), Some(50));
+        // A lagging actual_brightness must not override the requested level.
         fs::write(path.join("actual_brightness"), "19393\n").unwrap();
-        assert_eq!(brightness_at(&path).map(|level| level.percent), Some(100));
+        assert_eq!(brightness_at(&path).map(|level| level.percent), Some(50));
         fs::write(path.join("max_brightness"), "0\n").unwrap();
         assert!(brightness_at(&path).is_none());
         fs::remove_dir_all(path).unwrap();

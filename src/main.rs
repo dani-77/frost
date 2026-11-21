@@ -733,6 +733,18 @@ impl Frost {
                             self.brightness_target
                         };
                         if target == Some(sent) {
+                            // Raw device steps round to a neighbouring percent;
+                            // keep the value the user chose so the handle stays put.
+                            let level = level.map(|level| {
+                                if level.percent.abs_diff(sent) <= 1 {
+                                    Level {
+                                        percent: sent,
+                                        ..level
+                                    }
+                                } else {
+                                    level
+                                }
+                            });
                             if volume {
                                 self.volume_target = None;
                                 self.snapshot.volume = level;
@@ -1319,5 +1331,39 @@ mod level_tests {
         assert!(frost.workspaces_pending && !frost.workspaces_again);
         let _ = frost.update(Message::WorkspacesRead(Vec::new()));
         assert!(!frost.workspaces_pending);
+    }
+}
+
+#[cfg(test)]
+mod brightness_slider_tests {
+    use super::*;
+
+    fn level(percent: u16) -> Option<Level> {
+        Some(Level {
+            percent,
+            muted: false,
+        })
+    }
+
+    #[test]
+    fn the_slider_keeps_the_chosen_value_through_rounding() {
+        let (mut frost, _) = Frost::new(shell::channel().1, config::Config::default());
+        frost.snapshot.brightness = level(30);
+        let _ = frost.update(Message::SetBrightness(57));
+        assert_eq!(frost.snapshot.brightness, level(57));
+        // The device stores a raw step that reads back as 56%.
+        let _ = frost.update(Message::LevelSet(false, 57, Ok(level(56))));
+        assert_eq!(frost.snapshot.brightness, level(57));
+        assert!(frost.brightness_target.is_none());
+    }
+
+    #[test]
+    fn an_older_step_finishing_mid_drag_does_not_move_the_handle() {
+        let (mut frost, _) = Frost::new(shell::channel().1, config::Config::default());
+        frost.snapshot.brightness = level(30);
+        let _ = frost.update(Message::SetBrightness(40));
+        let _ = frost.update(Message::SetBrightness(60));
+        let _ = frost.update(Message::LevelSet(false, 40, Ok(level(40))));
+        assert_eq!(frost.snapshot.brightness, level(60));
     }
 }
