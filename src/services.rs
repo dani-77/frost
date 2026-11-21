@@ -967,6 +967,37 @@ pub async fn clear_wallpaper() -> Result<String, String> {
     Ok(String::new())
 }
 
+/// Matugen configuration with TOML-quoted paths, so any valid UTF-8 path
+/// (quotes, backslashes, non-ASCII) round-trips.
+fn matugen_config(template: &Path, output: &Path) -> Result<String, String> {
+    let quoted = |path: &Path| {
+        path.to_str()
+            .map(|path| toml::Value::String(path.to_owned()).to_string())
+            .ok_or("Cache path must be valid UTF-8")
+    };
+    Ok(format!(
+        "[config]\n[config.custom_colors]\ngreen = \"#9ece6a\"\nyellow = \"#e0af68\"\norange = \"#ff9e64\"\n[templates.d77]\ninput_path = {}\noutput_path = {}\n",
+        quoted(template)?,
+        quoted(output)?,
+    ))
+}
+
+#[cfg(test)]
+mod matugen_tests {
+    use super::*;
+
+    #[test]
+    fn config_paths_round_trip_through_toml() {
+        let template = Path::new("/home/zé\u{200b} \"q\"/\\cache/d77-palette.json");
+        let text = matugen_config(template, Path::new("/tmp/out.json")).unwrap();
+        let value: toml::Table = toml::from_str(&text).unwrap();
+        assert_eq!(
+            value["templates"]["d77"]["input_path"].as_str(),
+            template.to_str()
+        );
+    }
+}
+
 async fn generate_palette(path: &Path) -> Result<(), String> {
     if !executable("matugen") {
         return Ok(());
@@ -982,11 +1013,7 @@ async fn generate_palette(path: &Path) -> Result<(), String> {
     let _ = fs::remove_file(&output);
     fs::write(&template, include_str!("../assets/d77-palette.json"))
         .map_err(|err| err.to_string())?;
-    let toml = format!(
-        "[config]\n[config.custom_colors]\ngreen = \"#9ece6a\"\nyellow = \"#e0af68\"\norange = \"#ff9e64\"\n[templates.d77]\ninput_path = {:?}\noutput_path = {:?}\n",
-        template.display().to_string(),
-        output.display().to_string()
-    );
+    let toml = matugen_config(&template, &output)?;
     fs::write(&config, toml).map_err(|err| err.to_string())?;
     let status = tokio::time::timeout(
         Duration::from_secs(20),
