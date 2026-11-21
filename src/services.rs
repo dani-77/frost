@@ -84,7 +84,7 @@ fn executable(program: &str) -> bool {
         .is_some_and(|value| env::split_paths(&value).any(|dir| is_executable(&dir.join(path))))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Compositor {
     Sway,
     Hyprland,
@@ -298,13 +298,37 @@ pub async fn volume() -> Option<Level> {
     })
 }
 
-pub async fn brightness() -> Option<Level> {
-    let out = command("brightnessctl", &["-m", "-c", "backlight"])
-        .await
-        .ok()?;
-    let percent = out.split(',').nth(3)?.trim_end_matches('%').parse().ok()?;
+const BACKLIGHT: &str = "/sys/class/backlight";
+
+/// The backlight Frost reads and passes to brightnessctl, so both agree on
+/// the device when a laptop exposes several.
+fn backlight_device() -> Option<String> {
+    let mut names: Vec<_> = fs::read_dir(BACKLIGHT)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    names.sort();
+    names.into_iter().next()
+}
+
+/// Reads the backlight from sysfs, without starting a process.
+pub fn brightness() -> Option<Level> {
+    brightness_at(&Path::new(BACKLIGHT).join(backlight_device()?))
+}
+
+fn brightness_at(path: &Path) -> Option<Level> {
+    let value = |name| -> Option<u64> {
+        fs::read_to_string(path.join(name))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    };
+    let max = value("max_brightness").filter(|max| *max > 0)?;
+    let current = value("actual_brightness").or_else(|| value("brightness"))?;
     Some(Level {
-        percent,
+        percent: ((current.min(max) * 100 + max / 2) / max) as u16,
         muted: false,
     })
 }
@@ -325,17 +349,13 @@ pub async fn set_volume(percent: u16) -> Result<Option<Level>, String> {
 }
 
 pub async fn set_brightness(percent: u16) -> Result<Option<Level>, String> {
+    let device = backlight_device().ok_or("No backlight device")?;
     command(
         "brightnessctl",
-        &[
-            "-c",
-            "backlight",
-            "set",
-            &format!("{}%", percent.clamp(1, 100)),
-        ],
+        &["-d", &device, "set", &format!("{}%", percent.clamp(1, 100))],
     )
     .await?;
-    Ok(brightness().await)
+    Ok(brightness())
 }
 
 pub async fn adjust(control: Control) -> Result<String, String> {
@@ -353,13 +373,14 @@ pub async fn adjust(control: Control) -> Result<String, String> {
         Control::VolumeMute => {
             command("wpctl", &["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"]).await
         }
-        Control::BrightnessUp => command("brightnessctl", &["-c", "backlight", "set", "+5%"]).await,
-        Control::BrightnessDown => {
-            command(
-                "brightnessctl",
-                &["-c", "backlight", "--min-value=1", "set", "5%-"],
-            )
-            .await
+        Control::BrightnessUp | Control::BrightnessDown => {
+            let device = backlight_device().ok_or("No backlight device")?;
+            let args: &[&str] = if control == Control::BrightnessUp {
+                &["-d", &device, "set", "+5%"]
+            } else {
+                &["-d", &device, "--min-value=1", "set", "5%-"]
+            };
+            command("brightnessctl", args).await
         }
     }
 }
@@ -624,6 +645,20 @@ pub fn battery() -> Option<Battery> {
 #[cfg(test)]
 mod battery_tests {
     use super::*;
+
+    #[test]
+    fn reads_backlight_percent_from_sysfs() {
+        let path = env::temp_dir().join(format!("frost-backlight-test-{}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("max_brightness"), "19393\n").unwrap();
+        fs::write(path.join("brightness"), "9696\n").unwrap();
+        assert_eq!(brightness_at(&path).map(|level| level.percent), Some(50));
+        fs::write(path.join("actual_brightness"), "19393\n").unwrap();
+        assert_eq!(brightness_at(&path).map(|level| level.percent), Some(100));
+        fs::write(path.join("max_brightness"), "0\n").unwrap();
+        assert!(brightness_at(&path).is_none());
+        fs::remove_dir_all(path).unwrap();
+    }
 
     #[test]
     fn estimates_remaining_time_and_ignores_device_batteries() {

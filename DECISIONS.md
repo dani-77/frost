@@ -20,6 +20,13 @@
 - Spitfire, Wasp, and Whiplash announce `Active` and `Urgent` through `ext-workspace-v1`. Occupancy comes from `$XDG_RUNTIME_DIR/d77-workspaces-$WAYLAND_DISPLAY`, keyed by protocol ID. Without the counts file, workspaces are not marked empty.
 - Sway uses `representation` for occupancy and `urgent` for urgency. Hyprland uses `windows`; niri associates each window with its workspace ID.
 
+## Polling and events
+
+- The one-second tick reads only local files: clock, CPU, memory, load, battery, and backlight (from `/sys/class/backlight`, using the first device by name, which Frost also passes to `brightnessctl -d`). Music is read only while the dashboard is open.
+- Workspaces refresh on compositor events: `swaymsg -t subscribe`, Hyprland's `.socket2.sock`, and `niri msg event-stream`. Volume refreshes on `pactl subscribe` sink and server events. Bursts within 40 ms produce one read.
+- When an event source is missing or exits, Frost polls it every second and tries the source again after 30 seconds, so it never does worse than plain polling.
+- A volume or brightness read that started before Frost's own last change, or while a change is in flight, is discarded so it cannot revert the slider or show a stale OSD.
+
 ## Dashboard and terminal
 
 - The dashboard follows the other shells' 8–12 px spacing and includes weather updated every 15 minutes, cmus controls, and session actions with confirmation for exit actions.

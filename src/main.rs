@@ -5,10 +5,11 @@ mod media;
 mod services;
 mod telemetry;
 mod ui;
+mod watch;
 
 use iced::{
     Color, Element, Subscription, Task, Theme, event,
-    futures::{StreamExt, join, stream},
+    futures::{StreamExt, stream},
     keyboard::{self, Key, key::Named},
     widget::{image, operation},
     window::{self, Id},
@@ -197,25 +198,19 @@ struct Snapshot {
 }
 
 impl Snapshot {
-    async fn read(compositor: Compositor, dashboard: bool) -> Self {
+    /// Reads the local, cheap state. Workspaces and volume are read on
+    /// demand when their event sources report a change.
+    async fn read(dashboard: bool) -> Self {
         let started = Instant::now();
-        let music = async {
-            if dashboard {
-                services::music().await
-            } else {
-                None
-            }
+        let music = if dashboard {
+            services::music().await
+        } else {
+            None
         };
-        let (workspaces, volume, brightness, music) = join!(
-            services::workspaces(compositor),
-            services::volume(),
-            services::brightness(),
-            music,
-        );
         Self {
-            workspaces,
-            volume,
-            brightness,
+            workspaces: Vec::new(),
+            volume: None,
+            brightness: services::brightness(),
             music,
             battery: services::battery(),
             memory: services::memory(),
@@ -231,6 +226,10 @@ impl Snapshot {
 enum Message {
     Tick,
     Snapshot(Snapshot),
+    WorkspacesDirty,
+    WorkspacesRead(Vec<Workspace>),
+    VolumeDirty,
+    VolumeRead(Instant, Option<Level>),
     Network(telemetry::Network),
     PowerRead(Option<telemetry::PowerProfiles>),
     Weather(Option<String>),
@@ -321,6 +320,10 @@ struct Frost {
     volume_changed: Option<Instant>,
     brightness_changed: Option<Instant>,
     refreshing: bool,
+    workspaces_pending: bool,
+    workspaces_again: bool,
+    volume_pending: bool,
+    volume_again: bool,
     clock: chrono::DateTime<chrono::Local>,
 }
 
@@ -373,6 +376,10 @@ impl Frost {
             volume_changed: None,
             brightness_changed: None,
             refreshing: false,
+            workspaces_pending: false,
+            workspaces_again: false,
+            volume_pending: false,
+            volume_again: false,
             clock: chrono::Local::now(),
         };
         frost.refresh_files();
@@ -391,8 +398,16 @@ impl Frost {
         } else {
             Subscription::none()
         };
+        let compositor_events = if self.compositor == Compositor::Other {
+            Subscription::none()
+        } else {
+            Subscription::run_with(self.compositor, watch::workspaces)
+                .map(|()| Message::WorkspacesDirty)
+        };
         Subscription::batch([
             workspace_events,
+            compositor_events,
+            Subscription::run(watch::volume).map(|()| Message::VolumeDirty),
             self.shell_events.listen().filter_map(|event| match event {
                 ShellEvent::WindowOutputChanged { window, output } => Some(Message::OutputChanged(
                     window,
@@ -427,10 +442,7 @@ impl Frost {
         let dashboard = self
             .panel
             .is_some_and(|(panel, _)| panel == Panel::Dashboard);
-        Task::perform(
-            Snapshot::read(self.compositor, dashboard),
-            Message::Snapshot,
-        )
+        Task::perform(Snapshot::read(dashboard), Message::Snapshot)
     }
 
     fn poll_bar(&mut self) -> Task<Message> {
@@ -497,49 +509,40 @@ impl Frost {
                     self.reconcile_backdrops(),
                 ])
             }
-            Message::Snapshot(mut snapshot) => {
+            Message::Snapshot(snapshot) => {
                 self.refreshing = false;
-                // A read that began before Frost changed a level, or while a
-                // change is still in flight, carries a stale value: keep ours
-                // and do not announce it as an external change.
-                let stale = |changed: Option<Instant>, busy: bool| {
-                    busy || changed.is_some_and(|changed| {
-                        snapshot.started.is_none_or(|started| started <= changed)
-                    })
-                };
-                let volume_stale = stale(
-                    self.volume_changed,
-                    self.adjusting || self.volume_setting || self.volume_target.is_some(),
-                );
-                let brightness_stale = stale(
-                    self.brightness_changed,
-                    self.adjusting || self.brightness_setting || self.brightness_target.is_some(),
-                );
-                if volume_stale {
-                    snapshot.volume = self.snapshot.volume;
-                }
-                if brightness_stale {
-                    snapshot.brightness = self.snapshot.brightness;
-                }
-                let notice = if let (Some(previous), Some(next)) =
-                    (self.snapshot.volume, snapshot.volume)
-                    && previous != next
-                {
-                    Some(Notice::level("Volume", next))
-                } else if let (Some(previous), Some(next)) =
-                    (self.snapshot.brightness, snapshot.brightness)
-                    && previous != next
-                {
-                    Some(Notice::level("Brightness", next))
-                } else {
-                    None
-                };
+                let notice = self.level_read(false, snapshot.started, snapshot.brightness);
                 self.cpu_usage = snapshot
                     .cpu
                     .zip(self.snapshot.cpu)
                     .and_then(|(current, previous)| current.usage(previous));
-                self.snapshot = snapshot;
-                notice.map_or_else(Task::none, |notice| self.show_notice(notice))
+                self.snapshot.music = snapshot.music;
+                self.snapshot.battery = snapshot.battery;
+                self.snapshot.memory = snapshot.memory;
+                self.snapshot.cpu = snapshot.cpu;
+                self.snapshot.load = snapshot.load;
+                notice
+            }
+            Message::WorkspacesDirty => self.refresh_workspaces(),
+            Message::WorkspacesRead(workspaces) => {
+                self.workspaces_pending = false;
+                self.snapshot.workspaces = workspaces;
+                if std::mem::take(&mut self.workspaces_again) {
+                    self.refresh_workspaces()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::VolumeDirty => self.refresh_volume(),
+            Message::VolumeRead(started, volume) => {
+                self.volume_pending = false;
+                let notice = self.level_read(true, Some(started), volume);
+                let again = if std::mem::take(&mut self.volume_again) {
+                    self.refresh_volume()
+                } else {
+                    Task::none()
+                };
+                Task::batch([notice, again])
             }
             Message::Network(network) => {
                 self.network_pending = false;
@@ -847,12 +850,80 @@ impl Frost {
                 });
                 Task::batch([close, notice])
             }
-            Message::Finished(Ok(_), None) => self.poll(),
+            Message::Finished(Ok(_), None) => Task::batch([self.poll(), self.refresh_workspaces()]),
             Message::Finished(Err(err), _) => self.error(err),
             Message::Expire(generation) if generation == self.notice_generation => self
                 .notice
                 .take()
                 .map_or_else(Task::none, |(_, id)| window::close(id)),
+            _ => Task::none(),
+        }
+    }
+
+    fn refresh_workspaces(&mut self) -> Task<Message> {
+        if self.compositor == Compositor::Other {
+            return Task::none();
+        }
+        if self.workspaces_pending {
+            self.workspaces_again = true;
+            return Task::none();
+        }
+        self.workspaces_pending = true;
+        Task::perform(
+            services::workspaces(self.compositor),
+            Message::WorkspacesRead,
+        )
+    }
+
+    fn refresh_volume(&mut self) -> Task<Message> {
+        if self.volume_pending {
+            self.volume_again = true;
+            return Task::none();
+        }
+        self.volume_pending = true;
+        let started = Instant::now();
+        Task::perform(services::volume(), move |volume| {
+            Message::VolumeRead(started, volume)
+        })
+    }
+
+    /// Applies a volume or brightness read. A read that began before Frost
+    /// changed the level, or while a change is still in flight, carries a
+    /// stale value: keep ours and do not announce it as an external change.
+    fn level_read(
+        &mut self,
+        volume: bool,
+        started: Option<Instant>,
+        value: Option<Level>,
+    ) -> Task<Message> {
+        let (changed, busy) = if volume {
+            (
+                self.volume_changed,
+                self.volume_setting || self.volume_target.is_some(),
+            )
+        } else {
+            (
+                self.brightness_changed,
+                self.brightness_setting || self.brightness_target.is_some(),
+            )
+        };
+        let stale = self.adjusting
+            || busy
+            || changed.is_some_and(|changed| started.is_none_or(|started| started <= changed));
+        if stale {
+            return Task::none();
+        }
+        let current = if volume {
+            &mut self.snapshot.volume
+        } else {
+            &mut self.snapshot.brightness
+        };
+        let previous = std::mem::replace(current, value);
+        match (previous, value) {
+            (Some(previous), Some(next)) if previous != next => self.show_notice(Notice::level(
+                if volume { "Volume" } else { "Brightness" },
+                next,
+            )),
             _ => Task::none(),
         }
     }
@@ -900,7 +971,7 @@ impl Frost {
                 services::adjust(control).await?;
                 Ok(
                     if matches!(control, Control::BrightnessUp | Control::BrightnessDown) {
-                        services::brightness().await
+                        services::brightness()
                     } else {
                         services::volume().await
                     },
@@ -1178,26 +1249,26 @@ mod wallpaper_tests {
 mod level_tests {
     use super::*;
 
-    fn read_at(started: Instant, percent: u16) -> Snapshot {
-        Snapshot {
-            volume: Some(Level {
+    fn volume(started: Instant, percent: u16) -> Message {
+        Message::VolumeRead(
+            started,
+            Some(Level {
                 percent,
                 muted: false,
             }),
-            started: Some(started),
-            ..Snapshot::default()
-        }
+        )
     }
 
     #[test]
     fn stale_reads_do_not_override_a_slider_change_or_show_a_notice() {
         let (mut frost, _) = Frost::new(shell::channel().1);
-        let _ = frost.update(Message::Snapshot(read_at(Instant::now(), 30)));
+        let _ = frost.update(volume(Instant::now(), 30));
+        assert!(frost.notice.is_none());
         let before_drag = Instant::now();
 
         let _ = frost.update(Message::SetVolume(70));
         // A read that began before the drag reports the old level.
-        let _ = frost.update(Message::Snapshot(read_at(before_drag, 30)));
+        let _ = frost.update(volume(before_drag, 30));
         assert_eq!(frost.snapshot.volume.map(|level| level.percent), Some(70));
         assert!(frost.notice.is_none());
 
@@ -1210,13 +1281,28 @@ mod level_tests {
             })),
         ));
         // Still stale: it began before the change completed.
-        let _ = frost.update(Message::Snapshot(read_at(before_drag, 30)));
+        let _ = frost.update(volume(before_drag, 30));
         assert_eq!(frost.snapshot.volume.map(|level| level.percent), Some(70));
         assert!(frost.notice.is_none());
 
         // A fresh read with an external change is shown.
-        let _ = frost.update(Message::Snapshot(read_at(Instant::now(), 45)));
+        let _ = frost.update(volume(Instant::now(), 45));
         assert_eq!(frost.snapshot.volume.map(|level| level.percent), Some(45));
         assert!(frost.notice.is_some());
+    }
+
+    #[test]
+    fn workspace_refreshes_coalesce_while_a_read_is_pending() {
+        let (mut frost, _) = Frost::new(shell::channel().1);
+        frost.compositor = Compositor::Sway;
+        let _ = frost.update(Message::WorkspacesDirty);
+        let _ = frost.update(Message::WorkspacesDirty);
+        let _ = frost.update(Message::WorkspacesDirty);
+        assert!(frost.workspaces_pending && frost.workspaces_again);
+        let _ = frost.update(Message::WorkspacesRead(Vec::new()));
+        // One follow-up read covers every event that arrived meanwhile.
+        assert!(frost.workspaces_pending && !frost.workspaces_again);
+        let _ = frost.update(Message::WorkspacesRead(Vec::new()));
+        assert!(!frost.workspaces_pending);
     }
 }

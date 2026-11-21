@@ -54,8 +54,8 @@ Versioned packaging recipes are in [`packaging/arch/PKGBUILD`](packaging/arch/PK
 | Launcher | `gio` |
 | Wi-Fi | `nmcli` or `iwgetid` for the SSID; route and state come from Linux |
 | Power profile | `powerprofilesctl` and a compatible Power Profiles API |
-| Volume | `wpctl` with PipeWire/WirePlumber |
-| Brightness | `brightnessctl` and a user-accessible backlight device |
+| Volume | `wpctl` with PipeWire/WirePlumber; `pactl` (optional) lets Frost react to changes instead of polling every second |
+| Brightness | `brightnessctl` and a user-accessible backlight device; the level is read from `/sys/class/backlight` |
 | Music | `cmus-remote`; `tmux` or `screen` to start cmus from the dashboard |
 | Wallpaper | `awww` or `swww` with its daemon running |
 | Dynamic palette | `matugen` (optional) |
