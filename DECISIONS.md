@@ -34,12 +34,19 @@
 - The dashboard fits all sections in a 420 × 520 logical pixel panel without a scroll area. The volume and brightness sliders replace redundant plus/minus rows.
 - Volume and brightness sliders apply the latest requested value in sequence, so a rapid drag cannot leave an older value applied last.
 - The launcher honors `Terminal=true` desktop entries. It and the `nmtui` button resolve a terminal in the same order: Frost config, `TERMINAL`, `xdg-terminal-exec`, then installed terminals.
+- A `/` query switches the launcher to local file search. The background index is bounded to five directory levels and 20,000 non-hidden files, and file opening uses `xdg-open`.
+- Clicking CPU, memory, or network in the dashboard opens an in-place detail overlay. Process and interface commands run only when requested.
 - `~/.config/frost/config.toml` can set bar height and margin, visible bar modules, terminal executable, and weather location. Defaults preserve the original layout, and the configured terminal takes priority over `TERMINAL`.
 
 ## Clipboard
 
 - `frost clipboard` opens a separate panel with no bar module. It reads the cliphist database only when opened, searches previews and MIME types, and restores selected data through `wl-copy`.
 - The panel shows image thumbnails for visible matches, limits background decoding, and asks before `cliphist wipe`. It does not start another history daemon; the compositor runs the text and image `wl-paste --watch cliphist store` jobs once per session.
+
+## Notifications
+
+- The clock opens notifications through the daemon already running. Dunst gets a Frost panel backed by `dunstctl history` with recall and do not disturb controls; SwayNotificationCenter keeps its own control center through `swaync-client -t`.
+- The Dunst history clear action requires confirmation. Frost needs one of these daemons running and does not register as a notification daemon itself.
 
 ## Installation
 

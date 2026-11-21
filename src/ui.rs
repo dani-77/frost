@@ -396,6 +396,7 @@ impl Frost {
             Panel::Launcher => self.launcher(),
             Panel::Clipboard => self.clipboard_view(),
             Panel::Dashboard => self.dashboard(),
+            Panel::Notifications => self.notifications_view(),
             Panel::Wallpaper => self.wallpaper(),
             Panel::Session => self.session_view(),
         };
@@ -409,52 +410,90 @@ impl Frost {
 
     fn launcher(&self) -> Element<'_, Message> {
         let p = self.palette;
-        let mut input = text_input("Search applications", &self.query)
+        let files = self.query.starts_with('/');
+        let mut input = text_input("Search applications · / files", &self.query)
             .id(LAUNCHER_INPUT)
             .on_input(Message::Search)
             .padding(11)
             .size(15);
-        if let Some(app) = self.matches().nth(self.selected) {
+        if files {
+            if let Some(file) = self.file_matches().take(80).nth(self.selected) {
+                input = input.on_submit(Message::OpenFile(file.path.clone()));
+            }
+        } else if let Some(app) = self.matches().nth(self.selected) {
             input = input.on_submit(Message::Launch(app.path.clone()));
         }
         let mut items = column![].spacing(4);
         let mut count = 0;
-        for (index, app) in self.matches().enumerate() {
-            let focused = index == self.selected;
-            let detail = if app.detail.is_empty() {
-                app.path.file_stem().unwrap_or_default().to_string_lossy()
-            } else {
-                app.detail.as_str().into()
-            };
-            let body = column![
-                heading(shortened(&app.name, 48), 15),
-                text(shortened(&detail, 63)).size(11).color(if focused {
-                    p.on_ice
+        if files {
+            for (index, file) in self.file_matches().take(80).enumerate() {
+                let focused = index == self.selected;
+                let body = column![
+                    heading(shortened(&file.name, 48), 15),
+                    text(shortened(&file.path.to_string_lossy(), 63))
+                        .size(11)
+                        .color(if focused { p.on_ice } else { p.muted }),
+                ]
+                .spacing(3);
+                items = items.push(
+                    p.button(
+                        row![icon("󰈔", 20, if focused { p.on_ice } else { p.ice }), body]
+                            .spacing(10)
+                            .align_y(Alignment::Center),
+                        focused,
+                    )
+                    .padding([6, 10])
+                    .height(46)
+                    .width(Length::Fill)
+                    .on_press(Message::OpenFile(file.path.clone())),
+                );
+                count += 1;
+            }
+        } else {
+            for (index, app) in self.matches().enumerate() {
+                let focused = index == self.selected;
+                let detail = if app.detail.is_empty() {
+                    app.path.file_stem().unwrap_or_default().to_string_lossy()
                 } else {
-                    p.muted
-                }),
-            ]
-            .spacing(3);
-            items = items.push(
-                p.button(
-                    row![
-                        themed_icon(app.icon.as_deref(), if focused { p.on_ice } else { p.ice }),
-                        body
-                    ]
-                    .spacing(10)
-                    .align_y(Alignment::Center),
-                    focused,
-                )
-                .padding([6, 10])
-                .height(46)
-                .width(Length::Fill)
-                .on_press(Message::Launch(app.path.clone())),
-            );
-            count += 1;
+                    app.detail.as_str().into()
+                };
+                let body = column![
+                    heading(shortened(&app.name, 48), 15),
+                    text(shortened(&detail, 63)).size(11).color(if focused {
+                        p.on_ice
+                    } else {
+                        p.muted
+                    }),
+                ]
+                .spacing(3);
+                items = items.push(
+                    p.button(
+                        row![
+                            themed_icon(
+                                app.icon.as_deref(),
+                                if focused { p.on_ice } else { p.ice }
+                            ),
+                            body
+                        ]
+                        .spacing(10)
+                        .align_y(Alignment::Center),
+                        focused,
+                    )
+                    .padding([6, 10])
+                    .height(46)
+                    .width(Length::Fill)
+                    .on_press(Message::Launch(app.path.clone())),
+                );
+                count += 1;
+            }
         }
         if count == 0 {
             items = items.push(
-                container(p.label(if self.loading_apps {
+                container(p.label(if files && self.loading_files {
+                    "Indexing files…"
+                } else if files {
+                    "No matching files"
+                } else if self.loading_apps {
                     "Loading applications…"
                 } else {
                     "No matching applications"
@@ -582,23 +621,121 @@ impl Frost {
         .into()
     }
 
+    fn notifications_view(&self) -> Element<'_, Message> {
+        let p = self.palette;
+        let mut items = column![].spacing(6);
+        for entry in self.notifications.iter().take(50) {
+            let title = if entry.app.is_empty() {
+                entry.summary.clone()
+            } else {
+                format!("{} · {}", entry.app, entry.summary)
+            };
+            items = items.push(
+                p.button(
+                    column![
+                        heading(shortened(&title, 48), 14),
+                        text(shortened(&entry.body, 110)).size(11).color(p.muted),
+                    ]
+                    .spacing(4),
+                    false,
+                )
+                .padding(9)
+                .width(Length::Fill)
+                .on_press(Message::NotificationRecall(entry.id)),
+            );
+        }
+        if self.notifications.is_empty() {
+            items = items.push(
+                container(p.label(if let Some(err) = &self.notification_error {
+                    format!("Notifications unavailable: {err}")
+                } else if self.notification_loading {
+                    "Loading notifications…".to_owned()
+                } else {
+                    "No notifications in history".to_owned()
+                }))
+                .padding(10),
+            );
+        }
+        let actions: Element<'_, Message> = if self.notification_confirm_clear {
+            row![
+                p.label("Clear notification history?").width(Length::Fill),
+                p.action("Cancel", Message::NotificationCancelClear),
+                p.action("Clear", Message::NotificationConfirmClear),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into()
+        } else {
+            row![
+                p.action(
+                    if self.notification_paused {
+                        "Resume alerts"
+                    } else {
+                        "Do not disturb"
+                    },
+                    Message::NotificationDnd
+                ),
+                p.action("Clear history", Message::NotificationClear),
+            ]
+            .spacing(8)
+            .into()
+        };
+        column![
+            actions,
+            scrollable(items).height(Length::Fill),
+            p.label("Click a notification to show it again"),
+        ]
+        .spacing(9)
+        .height(Length::Fill)
+        .into()
+    }
+
     fn dashboard(&self) -> Element<'_, Message> {
         let p = self.palette;
         let s = &self.snapshot;
-        let metric = |label, value| {
-            container(column![p.label(label), heading(value, 20)].spacing(2))
-                .width(Length::FillPortion(1))
-                .padding([8, 10])
-                .style(move |_| p.tile(p.background, 8.0))
+        let metric = |label, value, kind| {
+            p.button(
+                column![p.label(label), heading(value, 20)].spacing(2),
+                false,
+            )
+            .width(Length::FillPortion(1))
+            .padding([8, 10])
+            .on_press(Message::Metric(kind))
         };
         let mut metrics = row![
-            metric("CPU", percent(self.cpu_usage)),
-            metric("Memory", percent(s.memory)),
-            metric("Load · 1 min", s.load.clone().unwrap_or_else(|| "—".into())),
+            metric(
+                "CPU",
+                percent(self.cpu_usage),
+                crate::telemetry::Metric::Cpu
+            ),
+            metric(
+                "Memory",
+                percent(s.memory),
+                crate::telemetry::Metric::Memory
+            ),
+            metric(
+                "Network",
+                match self.network {
+                    crate::telemetry::Network::Offline => "Offline".into(),
+                    _ => "Online".into(),
+                },
+                crate::telemetry::Metric::Network
+            ),
         ]
         .spacing(6);
         if let Some(battery) = s.battery {
-            metrics = metrics.push(metric("Battery", percent(Some(battery.percent))));
+            metrics = metrics.push(
+                container(
+                    column![
+                        p.label("Battery"),
+                        heading(percent(Some(battery.percent)), 20)
+                    ]
+                    .spacing(2),
+                )
+                .width(Length::FillPortion(1))
+                .padding([8, 10])
+                .style(move |_| p.tile(p.background, 8.0)),
+            );
         }
         let header = |label, level| {
             row![
@@ -690,7 +827,7 @@ impl Frost {
             ]
             .spacing(4)
         };
-        column![
+        let base = column![
             metrics,
             container(
                 row![
@@ -718,8 +855,39 @@ impl Frost {
             .spacing(8),
         ]
         .spacing(10)
-        .height(Length::Fill)
-        .into()
+        .height(Length::Fill);
+        if let Some(kind) = self.metric_detail {
+            let mut details = column![heading(kind.title(), 18)].spacing(8);
+            for line in &self.metric_lines {
+                details = details.push(text(shortened(line, 55)).size(13));
+            }
+            let overlay = container(
+                column![
+                    row![
+                        Space::new().width(Length::Fill),
+                        p.action("Close", Message::Metric(kind))
+                    ],
+                    container(details)
+                        .padding(15)
+                        .width(Length::Fill)
+                        .style(move |_| p.tile(p.elevated, 10.0)),
+                ]
+                .spacing(6),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(Alignment::Center)
+            .padding(12)
+            .style(move |_| {
+                container::Style::default().background(Color {
+                    a: 0.85,
+                    ..p.surface
+                })
+            });
+            stack([base.into(), overlay.into()]).into()
+        } else {
+            base.into()
+        }
     }
 
     fn wallpaper(&self) -> Element<'_, Message> {

@@ -1,6 +1,63 @@
 use crate::services::command;
 use std::{fs, path::Path};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Metric {
+    Cpu,
+    Memory,
+    Network,
+}
+
+impl Metric {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Cpu => "Top CPU processes",
+            Self::Memory => "Memory usage",
+            Self::Network => "Network interfaces",
+        }
+    }
+}
+
+pub async fn metric_details(metric: Metric) -> Vec<String> {
+    match metric {
+        Metric::Cpu => command("ps", &["-eo", "comm,%cpu", "--sort=-%cpu"])
+            .await
+            .map(|output| output.lines().take(7).map(str::to_owned).collect())
+            .unwrap_or_else(|err| vec![err]),
+        Metric::Memory => {
+            let data = fs::read_to_string("/proc/meminfo").unwrap_or_default();
+            let value = |key: &str| {
+                data.lines()
+                    .find_map(|line| line.strip_prefix(key))
+                    .and_then(|line| line.split_whitespace().next())
+                    .and_then(|number| number.parse::<u64>().ok())
+            };
+            match (value("MemTotal:"), value("MemAvailable:")) {
+                (Some(total), Some(available)) => vec![
+                    format!(
+                        "Used: {:.1} GiB",
+                        total.saturating_sub(available) as f64 / 1_048_576.0
+                    ),
+                    format!("Total: {:.1} GiB", total as f64 / 1_048_576.0),
+                    format!("Available: {:.1} GiB", available as f64 / 1_048_576.0),
+                ],
+                _ => vec!["Memory information unavailable".into()],
+            }
+        }
+        Metric::Network => command("ip", &["-brief", "address", "show"])
+            .await
+            .map(|output| {
+                output
+                    .lines()
+                    .filter(|line| !line.starts_with("lo "))
+                    .take(6)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_else(|err| vec![err]),
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Cpu {
     total: u64,

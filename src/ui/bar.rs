@@ -369,7 +369,14 @@ impl Frost {
         }
         bar = bar.push(status);
         if show("clock") {
-            bar = bar.push(divider()).push(clock);
+            bar = bar.push(divider()).push(hint(
+                p.button(clock, false)
+                    .padding([4, 5])
+                    .on_press(Message::OpenNotifications),
+                "Notification history and do not disturb",
+                p,
+                iced::widget::tooltip::Position::Bottom,
+            ));
         }
         if show("actions") {
             bar = bar.push(actions);

@@ -1,8 +1,10 @@
 mod clipboard;
 mod config;
+mod files;
 mod ipc;
 mod lock;
 mod media;
+mod notifications;
 mod services;
 mod telemetry;
 mod ui;
@@ -154,6 +156,7 @@ enum Panel {
     Launcher,
     Clipboard,
     Dashboard,
+    Notifications,
     Wallpaper,
     Session,
 }
@@ -164,6 +167,7 @@ impl Panel {
             Self::Launcher => "Applications",
             Self::Clipboard => "Clipboard",
             Self::Dashboard => "Dashboard",
+            Self::Notifications => "Notifications",
             Self::Wallpaper => "Wallpaper",
             Self::Session => "Session",
         }
@@ -174,6 +178,7 @@ impl Panel {
             Self::Launcher => (520, 470, Anchor::Top | Anchor::Left),
             Self::Clipboard => (520, 500, Anchor::Top | Anchor::Left),
             Self::Dashboard => (420, 520, Anchor::Top | Anchor::Right),
+            Self::Notifications => (420, 470, Anchor::Top | Anchor::Right),
             Self::Wallpaper => (550, 480, Anchor::Top | Anchor::Right),
             Self::Session => (310, 330, Anchor::Top | Anchor::Right),
         }
@@ -257,6 +262,7 @@ enum Message {
     OpenNetwork,
     PowerChanged(Result<telemetry::PowerProfiles, String>),
     AppsLoaded(Id, Vec<App>),
+    FilesLoaded(Id, Vec<files::Entry>),
     ClipboardLoaded(Id, Result<Vec<clipboard::Entry>, String>),
     ClipboardThumbnail(Id, u64, Option<image::Handle>),
     ClipboardSearch(String),
@@ -273,6 +279,18 @@ enum Message {
     Dismiss,
     Search(String),
     Launch(PathBuf),
+    OpenFile(PathBuf),
+    OpenNotifications,
+    NotificationsBackend(bool),
+    NotificationsReady(Id, Result<(bool, Vec<notifications::Entry>), String>),
+    NotificationDnd,
+    NotificationRecall(u64),
+    NotificationClear,
+    NotificationConfirmClear,
+    NotificationCancelClear,
+    NotificationActionDone(Result<String, String>),
+    Metric(telemetry::Metric),
+    MetricLoaded(telemetry::Metric, Vec<String>),
     Switch(Workspace),
     NativeWorkspaces(Option<Arc<WorkspaceSnapshot>>),
     NativeActivate(WorkspaceId),
@@ -317,7 +335,16 @@ struct Frost {
     window_counts: Option<HashMap<String, u32>>,
     confirm: Option<Session>,
     apps: Vec<App>,
+    files: Vec<files::Entry>,
     loading_apps: bool,
+    loading_files: bool,
+    notifications: Vec<notifications::Entry>,
+    notification_paused: bool,
+    notification_loading: bool,
+    notification_error: Option<String>,
+    notification_confirm_clear: bool,
+    metric_detail: Option<telemetry::Metric>,
+    metric_lines: Vec<String>,
     query: String,
     selected: usize,
     clipboard_entries: Vec<clipboard::Entry>,
@@ -383,7 +410,16 @@ impl Frost {
             window_counts: None,
             confirm: None,
             apps: Vec::new(),
+            files: Vec::new(),
             loading_apps: false,
+            loading_files: false,
+            notifications: Vec::new(),
+            notification_paused: false,
+            notification_loading: false,
+            notification_error: None,
+            notification_confirm_clear: false,
+            metric_detail: None,
+            metric_lines: Vec::new(),
             query: String::new(),
             selected: 0,
             clipboard_entries: Vec::new(),
@@ -552,6 +588,26 @@ impl Frost {
             .filter(move |app| terms.iter().all(|term| app.search.contains(term)))
     }
 
+    fn file_matches(&self) -> impl Iterator<Item = &files::Entry> {
+        let terms: Vec<_> = self
+            .query
+            .trim_start_matches('/')
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+        self.files
+            .iter()
+            .filter(move |file| terms.iter().all(|term| file.search.contains(term)))
+    }
+
+    fn launcher_count(&self) -> usize {
+        if self.query.starts_with('/') {
+            self.file_matches().count().min(80)
+        } else {
+            self.matches().count()
+        }
+    }
+
     fn clipboard_matches(&self) -> impl Iterator<Item = &clipboard::Entry> {
         let query = self.clipboard_query.trim().to_lowercase();
         self.clipboard_entries.iter().filter(move |entry| {
@@ -697,6 +753,26 @@ impl Frost {
                 self.selected = self.selected.min(self.matches().count().saturating_sub(1));
                 Task::none()
             }
+            Message::FilesLoaded(id, files) if self.panel == Some((Panel::Launcher, id)) => {
+                self.loading_files = false;
+                self.files = files;
+                self.selected = self.selected.min(self.launcher_count().saturating_sub(1));
+                Task::none()
+            }
+            Message::NotificationsReady(id, result)
+                if self.panel == Some((Panel::Notifications, id)) =>
+            {
+                self.notification_loading = false;
+                match result {
+                    Ok((paused, entries)) => {
+                        self.notification_paused = paused;
+                        self.notifications = entries;
+                        self.notification_error = None;
+                    }
+                    Err(err) => self.notification_error = Some(err),
+                }
+                Task::none()
+            }
             Message::ClipboardLoaded(id, result) if self.panel == Some((Panel::Clipboard, id)) => {
                 self.clipboard_loading = false;
                 match result {
@@ -752,7 +828,7 @@ impl Frost {
             Message::Key(id, key) => match self.panel {
                 Some((_, active)) if active == id && key == Named::Escape => self.dismiss(),
                 Some((Panel::Launcher, active)) if active == id => {
-                    let count = self.matches().count();
+                    let count = self.launcher_count();
                     self.selected = if key == Named::ArrowUp {
                         self.selected.saturating_sub(1)
                     } else {
@@ -824,6 +900,64 @@ impl Frost {
                 services::launch(path, self.config.terminal.clone()),
                 |result| Message::Finished(result, Some("")),
             ),
+            Message::OpenFile(path) => Task::perform(files::open(path), |result| {
+                Message::Finished(result, Some(""))
+            }),
+            Message::OpenNotifications => Task::perform(
+                async { services::command("dunstctl", &["is-paused"]).await.is_ok() },
+                Message::NotificationsBackend,
+            ),
+            Message::NotificationsBackend(true) => self.toggle(Panel::Notifications),
+            Message::NotificationsBackend(false) => {
+                Task::perform(services::command("swaync-client", &["-t"]), |result| {
+                    Message::Finished(result, None)
+                })
+            }
+            Message::NotificationDnd => {
+                Task::perform(notifications::toggle_dnd(), Message::NotificationActionDone)
+            }
+            Message::NotificationRecall(id) => {
+                Task::perform(notifications::recall(id), Message::NotificationActionDone)
+            }
+            Message::NotificationClear => {
+                self.notification_confirm_clear = true;
+                Task::none()
+            }
+            Message::NotificationCancelClear => {
+                self.notification_confirm_clear = false;
+                Task::none()
+            }
+            Message::NotificationConfirmClear if self.notification_confirm_clear => {
+                self.notification_confirm_clear = false;
+                Task::perform(notifications::clear(), Message::NotificationActionDone)
+            }
+            Message::NotificationActionDone(result) => match result {
+                Ok(_) => {
+                    if let Some((Panel::Notifications, id)) = self.panel {
+                        Task::perform(notifications::read(), move |result| {
+                            Message::NotificationsReady(id, result)
+                        })
+                    } else {
+                        Task::none()
+                    }
+                }
+                Err(err) => self.error(err),
+            },
+            Message::Metric(metric) => {
+                if self.metric_detail == Some(metric) {
+                    self.metric_detail = None;
+                    return Task::none();
+                }
+                self.metric_detail = Some(metric);
+                self.metric_lines = vec!["Loading details…".into()];
+                Task::perform(telemetry::metric_details(metric), move |lines| {
+                    Message::MetricLoaded(metric, lines)
+                })
+            }
+            Message::MetricLoaded(metric, lines) if self.metric_detail == Some(metric) => {
+                self.metric_lines = lines;
+                Task::none()
+            }
             Message::Switch(workspace) => {
                 Task::perform(services::switch(self.compositor, workspace), |result| {
                     Message::Finished(result, None)
@@ -1248,19 +1382,32 @@ impl Frost {
             return close;
         }
         let id = Id::unique();
+        self.metric_detail = None;
         let load = match panel {
             Panel::Launcher => {
                 self.loading_apps = true;
+                self.loading_files = true;
+                self.files.clear();
                 self.query.clear();
                 self.selected = 0;
-                Task::perform(
-                    async {
-                        tokio::task::spawn_blocking(services::apps)
-                            .await
-                            .unwrap_or_default()
-                    },
-                    move |apps| Message::AppsLoaded(id, apps),
-                )
+                Task::batch([
+                    Task::perform(
+                        async {
+                            tokio::task::spawn_blocking(services::apps)
+                                .await
+                                .unwrap_or_default()
+                        },
+                        move |apps| Message::AppsLoaded(id, apps),
+                    ),
+                    Task::perform(
+                        async {
+                            tokio::task::spawn_blocking(files::index)
+                                .await
+                                .unwrap_or_default()
+                        },
+                        move |files| Message::FilesLoaded(id, files),
+                    ),
+                ])
             }
             Panel::Clipboard => {
                 self.clipboard_loading = true;
@@ -1272,6 +1419,15 @@ impl Frost {
                 self.clipboard_thumbnails.clear();
                 Task::perform(clipboard::list(), move |entries| {
                     Message::ClipboardLoaded(id, entries)
+                })
+            }
+            Panel::Notifications => {
+                self.notification_loading = true;
+                self.notification_error = None;
+                self.notification_confirm_clear = false;
+                self.notifications.clear();
+                Task::perform(notifications::read(), move |result| {
+                    Message::NotificationsReady(id, result)
                 })
             }
             Panel::Wallpaper => {
