@@ -53,3 +53,7 @@
 - The Makefile builds a locked release binary as the regular user, then installs the binary under `$(PREFIX)/bin`. `DESTDIR` supports package staging.
 - The locker requires a root-owned policy at `/etc/pam.d/frost-locker`. The Makefile selects `void`, `arch`, `debian`, or `chimera` from `/etc/os-release`, including hybrid-d77 through `ID_LIKE`; `PAM_VARIANT` overrides the detected value. Chimera follows hybrid-d77's Utumno policy with `pam_unix.so` and adds an account rule because Frost calls `pam_acct_mgmt`. The example config and license texts are installed under `$(PREFIX)/share`.
 - Runtime art, the Matugen template, and the icon font are embedded in the binary, so the system-wide install does not need a separate assets directory.
+
+## Development workflow
+
+- Built-in hot reload was considered and abandoned. It adds runtime complexity without a useful role in the finished shell. Developers who want automatic rebuilds and restarts can configure external tooling themselves.
