@@ -34,6 +34,14 @@ pub struct Palette {
 
 impl Palette {
     pub fn load() -> Self {
+        Self::resolve(
+            crate::services::active_wallpaper().as_deref(),
+            crate::services::theme_mix(),
+        )
+    }
+
+    /// Builds the palette for an already known wallpaper and theme mix.
+    pub fn resolve(wallpaper: Option<&std::path::Path>, mix: f32) -> Self {
         let mut palette = Self {
             background: rgb(0x101822),
             surface: rgb(0x172331),
@@ -57,11 +65,8 @@ impl Palette {
             .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok());
         if let Some(data) = data
             && data.get("source").and_then(|value| value.as_str())
-                == crate::services::active_wallpaper()
-                    .as_deref()
-                    .and_then(|path| path.to_str())
+                == wallpaper.and_then(|path| path.to_str())
         {
-            let mix = crate::services::theme_mix();
             let color = |key: &str, fallback: Color| {
                 data.get(key)
                     .and_then(|value| value.as_str())
@@ -180,13 +185,15 @@ impl Palette {
         button(text(label).size(12))
             .padding([5, 8])
             .style(move |_, status| {
+                let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
                 let background = if active {
                     self.ice
                 } else if urgent {
                     self.danger
-                } else if occupied {
-                    self.elevated
-                } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                } else if occupied && hovered {
+                    // Occupied workspaces are already elevated; hover goes one step further.
+                    self.line
+                } else if occupied || hovered {
                     self.elevated
                 } else {
                     Color::TRANSPARENT
@@ -296,6 +303,25 @@ fn heading(value: impl Into<String>, size: u32) -> text::Text<'static> {
         weight: Weight::Semibold,
         ..Font::DEFAULT
     })
+}
+
+/// The time locale from LC_ALL, LC_TIME or LANG, for day and month names.
+pub(crate) fn time_locale() -> chrono::Locale {
+    static LOCALE: std::sync::OnceLock<chrono::Locale> = std::sync::OnceLock::new();
+    *LOCALE.get_or_init(|| {
+        ["LC_ALL", "LC_TIME", "LANG"]
+            .into_iter()
+            .filter_map(|name| env::var(name).ok())
+            .find(|value| !value.is_empty())
+            .and_then(|value| parse_locale(&value))
+            .unwrap_or(chrono::Locale::POSIX)
+    })
+}
+
+fn parse_locale(value: &str) -> Option<chrono::Locale> {
+    // "pt_PT.UTF-8@euro" -> "pt_PT"
+    let name = value.split(['.', '@']).next()?;
+    chrono::Locale::try_from(name).ok()
 }
 
 fn shortened(value: &str, length: usize) -> String {
@@ -592,7 +618,7 @@ impl Frost {
         let selected = match &self.wallpaper_target {
             Some(crate::WallpaperChoice::Image(path)) => Some(path.clone()),
             Some(crate::WallpaperChoice::Clear) => None,
-            None => crate::services::active_wallpaper(),
+            None => self.active_wallpaper.clone(),
         };
         let folder = crate::services::wallpaper_dir()
             .map(|path| path.display().to_string())
@@ -665,13 +691,11 @@ impl Frost {
             .align_y(Alignment::Center),
             row![
                 p.label("Theme mix"),
-                slider(0.0..=1.0, crate::services::theme_mix(), Message::ThemeMix)
+                slider(0.0..=1.0, self.theme_mix, Message::ThemeMix)
+                    .on_release(Message::ThemeMixRelease)
                     .step(0.01_f32)
                     .width(Length::Fill),
-                p.label(format!(
-                    "{}%",
-                    (crate::services::theme_mix() * 100.0).round() as u32
-                ))
+                p.label(format!("{}%", (self.theme_mix * 100.0).round() as u32))
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -752,6 +776,24 @@ impl Frost {
 }
 
 #[cfg(test)]
+mod locale_tests {
+    use super::*;
+
+    #[test]
+    fn locale_names_accept_encoding_and_modifier_suffixes() {
+        assert_eq!(parse_locale("pt_PT.UTF-8"), Some(chrono::Locale::pt_PT));
+        assert_eq!(parse_locale("de_DE@euro"), Some(chrono::Locale::de_DE));
+        assert_eq!(parse_locale("C.UTF-8"), None);
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 11, 21).unwrap();
+        assert_eq!(
+            date.format_localized("%A, %d %B", chrono::Locale::pt_PT)
+                .to_string(),
+            "sábado, 21 novembro"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::services::App;
@@ -762,7 +804,10 @@ mod tests {
 
     #[test]
     fn backdrop_renders_the_owl_in_the_lower_left_corner() {
-        let (frost, _tasks) = Frost::new(iced_wayland_subscriber::shell::channel().1);
+        let (frost, _tasks) = Frost::new(
+            iced_wayland_subscriber::shell::channel().1,
+            crate::config::Config::default(),
+        );
         let theme = frost.palette.theme();
         for scale in [1_usize, 2] {
             let width = 1000 * scale;
@@ -806,7 +851,10 @@ mod tests {
 
     #[test]
     fn dashboard_actions_fit_without_scrolling() {
-        let (mut frost, _tasks) = Frost::new(iced_wayland_subscriber::shell::channel().1);
+        let (mut frost, _tasks) = Frost::new(
+            iced_wayland_subscriber::shell::channel().1,
+            crate::config::Config::default(),
+        );
         frost.snapshot.music = Some(crate::services::Music {
             title: "A long example track title".into(),
             artist: "An artist".into(),
@@ -848,7 +896,10 @@ mod tests {
         let source = ::image::RgbaImage::from_pixel(570, 390, ::image::Rgba(marker));
         source.save(&file).unwrap();
 
-        let (mut frost, _tasks) = Frost::new(iced_wayland_subscriber::shell::channel().1);
+        let (mut frost, _tasks) = Frost::new(
+            iced_wayland_subscriber::shell::channel().1,
+            crate::config::Config::default(),
+        );
         frost.apps.push(App {
             name: "Sample application".into(),
             detail: String::new(),

@@ -84,7 +84,7 @@ fn executable(program: &str) -> bool {
         .is_some_and(|value| env::split_paths(&value).any(|dir| is_executable(&dir.join(path))))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Compositor {
     Sway,
     Hyprland,
@@ -152,24 +152,23 @@ pub async fn workspaces(compositor: Compositor) -> Vec<Workspace> {
             ws.focused = focused.as_ref().is_some_and(|active| active.id == ws.id);
         }
     }
-    if compositor == Compositor::Niri {
-        if let Ok(out) = command("niri", &["msg", "--json", "windows"]).await
-            && let Ok(windows) = serde_json::from_str::<Vec<serde_json::Value>>(&out)
-        {
-            for ws in &mut list {
-                ws.windows = Some(
-                    windows
-                        .iter()
-                        .filter(|window| {
-                            window.get("workspace_id").and_then(|id| id.as_i64()) == Some(ws.id)
-                        })
-                        .count() as u32,
-                );
-                ws.urgent = windows.iter().any(|window| {
-                    window.get("workspace_id").and_then(|id| id.as_i64()) == Some(ws.id)
-                        && window.get("is_urgent").and_then(|value| value.as_bool()) == Some(true)
-                });
-            }
+    if compositor == Compositor::Niri
+        && let Ok(out) = command("niri", &["msg", "--json", "windows"]).await
+        && let Ok(windows) = serde_json::from_str::<Vec<serde_json::Value>>(&out)
+    {
+        for ws in &mut list {
+            ws.windows = Some(
+                windows
+                    .iter()
+                    .filter(|window| {
+                        window.get("workspace_id").and_then(|id| id.as_i64()) == Some(ws.id)
+                    })
+                    .count() as u32,
+            );
+            ws.urgent = windows.iter().any(|window| {
+                window.get("workspace_id").and_then(|id| id.as_i64()) == Some(ws.id)
+                    && window.get("is_urgent").and_then(|value| value.as_bool()) == Some(true)
+            });
         }
     }
     list.retain(|ws| ws.id >= 0 || (compositor == Compositor::Sway && ws.name.is_some()));
@@ -298,13 +297,49 @@ pub async fn volume() -> Option<Level> {
     })
 }
 
-pub async fn brightness() -> Option<Level> {
-    let out = command("brightnessctl", &["-m", "-c", "backlight"])
-        .await
-        .ok()?;
-    let percent = out.split(',').nth(3)?.trim_end_matches('%').parse().ok()?;
+const BACKLIGHT: &str = "/sys/class/backlight";
+
+/// The backlight Frost reads and passes to brightnessctl, so both agree on
+/// the device when a laptop exposes several. Follows the kernel's documented
+/// preference (firmware, then platform, then raw), then the name.
+fn backlight_device() -> Option<String> {
+    preferred_backlight(Path::new(BACKLIGHT))
+}
+
+fn preferred_backlight(class: &Path) -> Option<String> {
+    let rank = |name: &str| match fs::read_to_string(class.join(name).join("type"))
+        .unwrap_or_default()
+        .trim()
+    {
+        "firmware" => 0,
+        "platform" => 1,
+        "raw" => 2,
+        _ => 3,
+    };
+    fs::read_dir(class)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .min_by_key(|name| (rank(name), name.clone()))
+}
+
+/// Reads the backlight from sysfs, without starting a process.
+pub fn brightness() -> Option<Level> {
+    brightness_at(&Path::new(BACKLIGHT).join(backlight_device()?))
+}
+
+fn brightness_at(path: &Path) -> Option<Level> {
+    let value = |name| -> Option<u64> {
+        fs::read_to_string(path.join(name))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    };
+    let max = value("max_brightness").filter(|max| *max > 0)?;
+    let current = value("actual_brightness").or_else(|| value("brightness"))?;
     Some(Level {
-        percent,
+        percent: ((current.min(max) * 100 + max / 2) / max) as u16,
         muted: false,
     })
 }
@@ -325,17 +360,13 @@ pub async fn set_volume(percent: u16) -> Result<Option<Level>, String> {
 }
 
 pub async fn set_brightness(percent: u16) -> Result<Option<Level>, String> {
+    let device = backlight_device().ok_or("No backlight device")?;
     command(
         "brightnessctl",
-        &[
-            "-c",
-            "backlight",
-            "set",
-            &format!("{}%", percent.clamp(1, 100)),
-        ],
+        &["-d", &device, "set", &format!("{}%", percent.clamp(1, 100))],
     )
     .await?;
-    Ok(brightness().await)
+    Ok(brightness())
 }
 
 pub async fn adjust(control: Control) -> Result<String, String> {
@@ -353,13 +384,14 @@ pub async fn adjust(control: Control) -> Result<String, String> {
         Control::VolumeMute => {
             command("wpctl", &["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"]).await
         }
-        Control::BrightnessUp => command("brightnessctl", &["-c", "backlight", "set", "+5%"]).await,
-        Control::BrightnessDown => {
-            command(
-                "brightnessctl",
-                &["-c", "backlight", "--min-value=1", "set", "5%-"],
-            )
-            .await
+        Control::BrightnessUp | Control::BrightnessDown => {
+            let device = backlight_device().ok_or("No backlight device")?;
+            let args: &[&str] = if control == Control::BrightnessUp {
+                &["-d", &device, "set", "+5%"]
+            } else {
+                &["-d", &device, "--min-value=1", "set", "5%-"]
+            };
+            command("brightnessctl", args).await
         }
     }
 }
@@ -398,37 +430,51 @@ pub async fn music() -> Option<Music> {
     Some(music)
 }
 
+fn is_cmus(process: &Path) -> bool {
+    fs::read_to_string(process.join("comm"))
+        .ok()
+        .as_deref()
+        .map(str::trim)
+        == Some("cmus")
+}
+
+/// HOME and XDG_RUNTIME_DIR of the running cmus, so cmus-remote finds its
+/// socket. The process is cached and /proc is scanned only when it is gone.
 fn cmus_environment() -> HashMap<String, String> {
-    let mut result = HashMap::new();
+    static CACHE: std::sync::Mutex<Option<(PathBuf, HashMap<String, String>)>> =
+        std::sync::Mutex::new(None);
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((process, environment)) = cache.as_ref()
+        && is_cmus(process)
+    {
+        return environment.clone();
+    }
+    *cache = None;
     let Ok(entries) = fs::read_dir("/proc") else {
-        return result;
+        return HashMap::new();
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path
-            .file_name()
+    let Some(process) = entries.flatten().map(|entry| entry.path()).find(|path| {
+        path.file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.bytes().all(|b| b.is_ascii_digit()))
-            || fs::read_to_string(path.join("comm"))
-                .ok()
-                .as_deref()
-                .map(str::trim)
-                != Some("cmus")
-        {
-            continue;
-        }
-        if let Ok(data) = fs::read(path.join("environ")) {
-            for item in data.split(|byte| *byte == 0) {
-                for key in ["HOME", "XDG_RUNTIME_DIR"] {
-                    let prefix = format!("{key}=");
-                    if let Some(value) = item.strip_prefix(prefix.as_bytes()) {
-                        result.insert(key.into(), String::from_utf8_lossy(value).into_owned());
-                    }
+            && is_cmus(path)
+    }) else {
+        return HashMap::new();
+    };
+    let mut result = HashMap::new();
+    if let Ok(data) = fs::read(process.join("environ")) {
+        for item in data.split(|byte| *byte == 0) {
+            for key in ["HOME", "XDG_RUNTIME_DIR"] {
+                let prefix = format!("{key}=");
+                if let Some(value) = item.strip_prefix(prefix.as_bytes()) {
+                    result.insert(key.into(), String::from_utf8_lossy(value).into_owned());
                 }
             }
         }
-        break;
     }
+    *cache = Some((process, result.clone()));
     result
 }
 
@@ -626,6 +672,37 @@ mod battery_tests {
     use super::*;
 
     #[test]
+    fn reads_backlight_percent_from_sysfs() {
+        let path = env::temp_dir().join(format!("frost-backlight-test-{}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("max_brightness"), "19393\n").unwrap();
+        fs::write(path.join("brightness"), "9696\n").unwrap();
+        assert_eq!(brightness_at(&path).map(|level| level.percent), Some(50));
+        fs::write(path.join("actual_brightness"), "19393\n").unwrap();
+        assert_eq!(brightness_at(&path).map(|level| level.percent), Some(100));
+        fs::write(path.join("max_brightness"), "0\n").unwrap();
+        assert!(brightness_at(&path).is_none());
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn prefers_firmware_then_platform_then_raw_backlights() {
+        let class = env::temp_dir().join(format!("frost-backlight-class-{}", std::process::id()));
+        for (name, kind) in [("acpi_video0", "raw"), ("intel_backlight", "platform")] {
+            fs::create_dir_all(class.join(name)).unwrap();
+            fs::write(class.join(name).join("type"), format!("{kind}\n")).unwrap();
+        }
+        assert_eq!(
+            preferred_backlight(&class).as_deref(),
+            Some("intel_backlight")
+        );
+        fs::create_dir_all(class.join("zfirmware")).unwrap();
+        fs::write(class.join("zfirmware/type"), "firmware\n").unwrap();
+        assert_eq!(preferred_backlight(&class).as_deref(), Some("zfirmware"));
+        fs::remove_dir_all(class).unwrap();
+    }
+
+    #[test]
     fn estimates_remaining_time_and_ignores_device_batteries() {
         let path = env::temp_dir().join(format!("frost-battery-test-{}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
@@ -670,7 +747,14 @@ impl Session {
 }
 
 pub async fn lock() -> Result<String, String> {
-    let executable = env::current_exe().map_err(|err| format!("could not locate Frost: {err}"))?;
+    // After a package upgrade the running binary is unlinked and current_exe
+    // reports "/usr/bin/frost (deleted)"; /proc/self/exe still executes it.
+    let proc_exe = Path::new("/proc/self/exe");
+    let executable = if proc_exe.exists() {
+        proc_exe.to_owned()
+    } else {
+        env::current_exe().map_err(|err| format!("could not locate Frost: {err}"))?
+    };
     let output = tokio::process::Command::new(executable)
         .arg("lock")
         .stdin(std::process::Stdio::null())
@@ -723,7 +807,7 @@ async fn power(method: &str) -> Result<String, String> {
     .await
 }
 
-pub async fn launch(path: PathBuf) -> Result<String, String> {
+pub async fn launch(path: PathBuf, terminal: Option<String>) -> Result<String, String> {
     let locales = get_languages_from_env();
     if let Ok(entry) = DesktopEntry::from_path(&path, Some(&locales))
         && entry.terminal()
@@ -731,7 +815,7 @@ pub async fn launch(path: PathBuf) -> Result<String, String> {
         let argv = entry
             .parse_exec()
             .map_err(|err| format!("desktop Exec: {err}"))?;
-        return spawn_in_terminal(&argv);
+        return spawn_in_terminal(terminal, &argv);
     }
     let status = tokio::time::timeout(
         Duration::from_secs(3),
@@ -753,13 +837,12 @@ pub async fn launch(path: PathBuf) -> Result<String, String> {
     }
 }
 
-pub async fn open_nmtui() -> Result<String, String> {
-    spawn_in_terminal(&["nmtui".into()])
+pub async fn open_nmtui(terminal: Option<String>) -> Result<String, String> {
+    spawn_in_terminal(terminal, &["nmtui".into()])
 }
 
-fn spawn_in_terminal(argv: &[String]) -> Result<String, String> {
-    let preferred = crate::config::Config::load()
-        .terminal
+fn spawn_in_terminal(terminal: Option<String>, argv: &[String]) -> Result<String, String> {
+    let preferred = terminal
         .filter(|name| executable(name))
         .or_else(|| env::var("TERMINAL").ok().filter(|name| executable(name)));
     let program = preferred
@@ -912,6 +995,37 @@ pub async fn clear_wallpaper() -> Result<String, String> {
     Ok(String::new())
 }
 
+/// Matugen configuration with TOML-quoted paths, so any valid UTF-8 path
+/// (quotes, backslashes, non-ASCII) round-trips.
+fn matugen_config(template: &Path, output: &Path) -> Result<String, String> {
+    let quoted = |path: &Path| {
+        path.to_str()
+            .map(|path| toml::Value::String(path.to_owned()).to_string())
+            .ok_or("Cache path must be valid UTF-8")
+    };
+    Ok(format!(
+        "[config]\n[config.custom_colors]\ngreen = \"#9ece6a\"\nyellow = \"#e0af68\"\norange = \"#ff9e64\"\n[templates.d77]\ninput_path = {}\noutput_path = {}\n",
+        quoted(template)?,
+        quoted(output)?,
+    ))
+}
+
+#[cfg(test)]
+mod matugen_tests {
+    use super::*;
+
+    #[test]
+    fn config_paths_round_trip_through_toml() {
+        let template = Path::new("/home/zé\u{200b} \"q\"/\\cache/d77-palette.json");
+        let text = matugen_config(template, Path::new("/tmp/out.json")).unwrap();
+        let value: toml::Table = toml::from_str(&text).unwrap();
+        assert_eq!(
+            value["templates"]["d77"]["input_path"].as_str(),
+            template.to_str()
+        );
+    }
+}
+
 async fn generate_palette(path: &Path) -> Result<(), String> {
     if !executable("matugen") {
         return Ok(());
@@ -927,11 +1041,7 @@ async fn generate_palette(path: &Path) -> Result<(), String> {
     let _ = fs::remove_file(&output);
     fs::write(&template, include_str!("../assets/d77-palette.json"))
         .map_err(|err| err.to_string())?;
-    let toml = format!(
-        "[config]\n[config.custom_colors]\ngreen = \"#9ece6a\"\nyellow = \"#e0af68\"\norange = \"#ff9e64\"\n[templates.d77]\ninput_path = {:?}\noutput_path = {:?}\n",
-        template.display().to_string(),
-        output.display().to_string()
-    );
+    let toml = matugen_config(&template, &output)?;
     fs::write(&config, toml).map_err(|err| err.to_string())?;
     let status = tokio::time::timeout(
         Duration::from_secs(20),

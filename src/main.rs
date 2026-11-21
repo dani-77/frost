@@ -5,10 +5,11 @@ mod media;
 mod services;
 mod telemetry;
 mod ui;
+mod watch;
 
 use iced::{
     Color, Element, Subscription, Task, Theme, event,
-    futures::{StreamExt, join, stream},
+    futures::{StreamExt, stream},
     keyboard::{self, Key, key::Named},
     widget::{image, operation},
     window::{self, Id},
@@ -72,7 +73,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let socket = ipc::Socket::bind()?;
             let (shell_broadcast, shell_events) = shell::channel();
             daemon(
-                move || Frost::new(shell_events.clone()),
+                {
+                    let config = config.clone();
+                    move || Frost::new(shell_events.clone(), config.clone())
+                },
                 "frost",
                 Frost::update,
                 Frost::view,
@@ -192,32 +196,30 @@ struct Snapshot {
     memory: Option<u16>,
     cpu: Option<telemetry::Cpu>,
     load: Option<String>,
+    /// When this read began; older reads must not override local changes.
+    started: Option<Instant>,
 }
 
 impl Snapshot {
-    async fn read(compositor: Compositor, dashboard: bool) -> Self {
-        let music = async {
-            if dashboard {
-                services::music().await
-            } else {
-                None
-            }
+    /// Reads the local, cheap state. Workspaces and volume are read on
+    /// demand when their event sources report a change.
+    async fn read(dashboard: bool) -> Self {
+        let started = Instant::now();
+        let music = if dashboard {
+            services::music().await
+        } else {
+            None
         };
-        let (workspaces, volume, brightness, music) = join!(
-            services::workspaces(compositor),
-            services::volume(),
-            services::brightness(),
-            music,
-        );
         Self {
-            workspaces,
-            volume,
-            brightness,
+            workspaces: Vec::new(),
+            volume: None,
+            brightness: services::brightness(),
             music,
             battery: services::battery(),
             memory: services::memory(),
             cpu: telemetry::Cpu::read(),
             load: services::load(),
+            started: Some(started),
         }
     }
 }
@@ -227,6 +229,10 @@ impl Snapshot {
 enum Message {
     Tick,
     Snapshot(Snapshot),
+    WorkspacesDirty,
+    WorkspacesRead(Vec<Workspace>),
+    VolumeDirty,
+    VolumeRead(Instant, Option<Level>),
     Network(telemetry::Network),
     PowerRead(Option<telemetry::PowerProfiles>),
     Weather(Option<String>),
@@ -259,6 +265,7 @@ enum Message {
     WallpaperClear,
     WallpaperDone(WallpaperChoice, Result<String, String>),
     ThemeMix(f32),
+    ThemeMixRelease,
     Session(Session),
     Confirm(Session),
     Cancel,
@@ -278,6 +285,12 @@ struct Frost {
     notice: Option<(Notice, Id)>,
     notice_generation: u64,
     palette: ui::Palette,
+    /// File-backed state, refreshed on each tick so views never touch disk.
+    active_wallpaper: Option<PathBuf>,
+    theme_mix: f32,
+    /// The slider moved since the theme mix was last saved.
+    theme_mix_dirty: bool,
+    window_counts: Option<HashMap<String, u32>>,
     confirm: Option<Session>,
     apps: Vec<App>,
     loading_apps: bool,
@@ -306,14 +319,21 @@ struct Frost {
     brightness_target: Option<u16>,
     volume_setting: bool,
     brightness_setting: bool,
+    /// Last time Frost itself changed the volume or brightness.
+    volume_changed: Option<Instant>,
+    brightness_changed: Option<Instant>,
     refreshing: bool,
+    workspaces_pending: bool,
+    workspaces_again: bool,
+    volume_pending: bool,
+    volume_again: bool,
     clock: chrono::DateTime<chrono::Local>,
 }
 
 impl Frost {
-    fn new(shell_events: ShellReceiver) -> (Self, Task<Message>) {
+    fn new(shell_events: ShellReceiver, config: config::Config) -> (Self, Task<Message>) {
         let mut frost = Self {
-            config: config::Config::load(),
+            config,
             compositor: Compositor::detect(),
             shell_events,
             native_workspaces: None,
@@ -324,6 +344,10 @@ impl Frost {
             notice: None,
             notice_generation: 0,
             palette: ui::Palette::load(),
+            active_wallpaper: None,
+            theme_mix: 1.0,
+            theme_mix_dirty: false,
+            window_counts: None,
             confirm: None,
             apps: Vec::new(),
             loading_apps: false,
@@ -352,10 +376,27 @@ impl Frost {
             brightness_target: None,
             volume_setting: false,
             brightness_setting: false,
+            volume_changed: None,
+            brightness_changed: None,
             refreshing: false,
+            workspaces_pending: false,
+            workspaces_again: false,
+            volume_pending: false,
+            volume_again: false,
             clock: chrono::Local::now(),
         };
-        let poll = Task::batch([frost.poll(), frost.poll_bar()]);
+        frost.refresh_files();
+        let warnings = std::mem::take(&mut frost.config.warnings);
+        let warning = if warnings.is_empty() {
+            Task::none()
+        } else {
+            frost.show_notice(Notice {
+                title: "Configuration problem".into(),
+                detail: warnings.join("; "),
+                level: None,
+            })
+        };
+        let poll = Task::batch([frost.poll(), frost.poll_bar(), warning]);
         (frost, poll)
     }
 
@@ -370,8 +411,16 @@ impl Frost {
         } else {
             Subscription::none()
         };
+        let compositor_events = if self.compositor == Compositor::Other {
+            Subscription::none()
+        } else {
+            Subscription::run_with(self.compositor, watch::workspaces)
+                .map(|()| Message::WorkspacesDirty)
+        };
         Subscription::batch([
             workspace_events,
+            compositor_events,
+            Subscription::run(watch::volume).map(|()| Message::VolumeDirty),
             self.shell_events.listen().filter_map(|event| match event {
                 ShellEvent::WindowOutputChanged { window, output } => Some(Message::OutputChanged(
                     window,
@@ -406,10 +455,7 @@ impl Frost {
         let dashboard = self
             .panel
             .is_some_and(|(panel, _)| panel == Panel::Dashboard);
-        Task::perform(
-            Snapshot::read(self.compositor, dashboard),
-            Message::Snapshot,
-        )
+        Task::perform(Snapshot::read(dashboard), Message::Snapshot)
     }
 
     fn poll_bar(&mut self) -> Task<Message> {
@@ -468,9 +514,7 @@ impl Frost {
         match message {
             Message::Tick => {
                 self.clock = chrono::Local::now();
-                if !self.wallpaper_busy {
-                    self.palette = ui::Palette::load();
-                }
+                self.refresh_files();
                 Task::batch([
                     self.poll(),
                     self.poll_bar(),
@@ -480,36 +524,38 @@ impl Frost {
             }
             Message::Snapshot(snapshot) => {
                 self.refreshing = false;
-                let notice = if !self.adjusting
-                    && let (Some(previous), Some(next)) = (self.snapshot.volume, snapshot.volume)
-                    && previous != next
-                {
-                    Some(Notice::level("Volume", next))
-                } else if !self.adjusting
-                    && let (Some(previous), Some(next)) =
-                        (self.snapshot.brightness, snapshot.brightness)
-                    && previous != next
-                {
-                    Some(Notice::level("Brightness", next))
-                } else {
-                    None
-                };
+                let notice = self.level_read(false, snapshot.started, snapshot.brightness);
                 self.cpu_usage = snapshot
                     .cpu
                     .zip(self.snapshot.cpu)
                     .and_then(|(current, previous)| current.usage(previous));
-                self.snapshot = snapshot;
-                if let Some(target) = self.volume_target
-                    && let Some(level) = &mut self.snapshot.volume
-                {
-                    level.percent = target;
+                self.snapshot.music = snapshot.music;
+                self.snapshot.battery = snapshot.battery;
+                self.snapshot.memory = snapshot.memory;
+                self.snapshot.cpu = snapshot.cpu;
+                self.snapshot.load = snapshot.load;
+                notice
+            }
+            Message::WorkspacesDirty => self.refresh_workspaces(),
+            Message::WorkspacesRead(workspaces) => {
+                self.workspaces_pending = false;
+                self.snapshot.workspaces = workspaces;
+                if std::mem::take(&mut self.workspaces_again) {
+                    self.refresh_workspaces()
+                } else {
+                    Task::none()
                 }
-                if let Some(target) = self.brightness_target
-                    && let Some(level) = &mut self.snapshot.brightness
-                {
-                    level.percent = target;
-                }
-                notice.map_or_else(Task::none, |notice| self.show_notice(notice))
+            }
+            Message::VolumeDirty => self.refresh_volume(),
+            Message::VolumeRead(started, volume) => {
+                self.volume_pending = false;
+                let notice = self.level_read(true, Some(started), volume);
+                let again = if std::mem::take(&mut self.volume_again) {
+                    self.refresh_volume()
+                } else {
+                    Task::none()
+                };
+                Task::batch([notice, again])
             }
             Message::Network(network) => {
                 self.network_pending = false;
@@ -535,9 +581,10 @@ impl Frost {
                 self.power_pending = true;
                 Task::perform(telemetry::PowerProfiles::cycle(), Message::PowerChanged)
             }
-            Message::OpenNetwork => Task::perform(services::open_nmtui(), |result| {
-                Message::Finished(result, None)
-            }),
+            Message::OpenNetwork => Task::perform(
+                services::open_nmtui(self.config.terminal.clone()),
+                |result| Message::Finished(result, None),
+            ),
             Message::PowerChanged(result) => {
                 self.power_pending = false;
                 self.power_checked = Some(Instant::now());
@@ -607,9 +654,10 @@ impl Frost {
                 self.selected = 0;
                 self.reveal_selection(0)
             }
-            Message::Launch(path) => Task::perform(services::launch(path), |result| {
-                Message::Finished(result, Some(""))
-            }),
+            Message::Launch(path) => Task::perform(
+                services::launch(path, self.config.terminal.clone()),
+                |result| Message::Finished(result, Some("")),
+            ),
             Message::Switch(workspace) => {
                 Task::perform(services::switch(self.compositor, workspace), |result| {
                     Message::Finished(result, None)
@@ -654,6 +702,7 @@ impl Frost {
                 self.next_control()
             }
             Message::SetVolume(value) => {
+                self.volume_changed = Some(Instant::now());
                 self.volume_target = Some(value.min(100));
                 if let Some(level) = &mut self.snapshot.volume {
                     level.percent = value.min(100);
@@ -661,6 +710,7 @@ impl Frost {
                 self.next_level(true)
             }
             Message::SetBrightness(value) => {
+                self.brightness_changed = Some(Instant::now());
                 self.brightness_target = Some(value.clamp(1, 100));
                 if let Some(level) = &mut self.snapshot.brightness {
                     level.percent = value.clamp(1, 100);
@@ -670,8 +720,10 @@ impl Frost {
             Message::LevelSet(volume, sent, result) => {
                 if volume {
                     self.volume_setting = false;
+                    self.volume_changed = Some(Instant::now());
                 } else {
                     self.brightness_setting = false;
+                    self.brightness_changed = Some(Instant::now());
                 }
                 match result {
                     Ok(level) => {
@@ -707,10 +759,12 @@ impl Frost {
                     Ok(Some(level))
                         if matches!(control, Control::BrightnessUp | Control::BrightnessDown) =>
                     {
+                        self.brightness_changed = Some(Instant::now());
                         self.snapshot.brightness = Some(level);
                         self.show_notice(Notice::level("Brightness", level))
                     }
                     Ok(Some(level)) => {
+                        self.volume_changed = Some(Instant::now());
                         self.snapshot.volume = Some(level);
                         self.show_notice(Notice::level("Volume", level))
                     }
@@ -733,12 +787,12 @@ impl Frost {
             }
             Message::WallpaperDone(choice, result) => {
                 self.wallpaper_busy = false;
+                self.refresh_files();
                 let backdrops = self.reconcile_backdrops();
                 if self.wallpaper_target.as_ref() != Some(&choice) {
                     return Task::batch([backdrops, self.next_wallpaper()]);
                 }
                 self.wallpaper_target = None;
-                self.palette = ui::Palette::load();
                 let notice = match result {
                     Ok(_) => self.show_notice(Notice {
                         title: match choice {
@@ -754,10 +808,22 @@ impl Frost {
                 Task::batch([backdrops, notice])
             }
             Message::ThemeMix(value) => {
-                if let Err(err) = services::save_theme_mix(value) {
+                // Preview in memory while dragging; the file is written on release.
+                self.theme_mix = value.clamp(0.0, 1.0);
+                self.theme_mix_dirty = true;
+                if !self.wallpaper_busy {
+                    self.palette =
+                        ui::Palette::resolve(self.active_wallpaper.as_deref(), self.theme_mix);
+                }
+                Task::none()
+            }
+            Message::ThemeMixRelease => {
+                if !std::mem::take(&mut self.theme_mix_dirty) {
+                    return Task::none();
+                }
+                if let Err(err) = services::save_theme_mix(self.theme_mix) {
                     return self.error(err);
                 }
-                self.palette = ui::Palette::load();
                 Task::none()
             }
             Message::Session(Session::Lock) => {
@@ -799,13 +865,99 @@ impl Frost {
                 });
                 Task::batch([close, notice])
             }
-            Message::Finished(Ok(_), None) => self.poll(),
+            Message::Finished(Ok(_), None) => Task::batch([self.poll(), self.refresh_workspaces()]),
             Message::Finished(Err(err), _) => self.error(err),
             Message::Expire(generation) if generation == self.notice_generation => self
                 .notice
                 .take()
                 .map_or_else(Task::none, |(_, id)| window::close(id)),
             _ => Task::none(),
+        }
+    }
+
+    fn refresh_workspaces(&mut self) -> Task<Message> {
+        if self.compositor == Compositor::Other {
+            return Task::none();
+        }
+        if self.workspaces_pending {
+            self.workspaces_again = true;
+            return Task::none();
+        }
+        self.workspaces_pending = true;
+        Task::perform(
+            services::workspaces(self.compositor),
+            Message::WorkspacesRead,
+        )
+    }
+
+    fn refresh_volume(&mut self) -> Task<Message> {
+        if self.volume_pending {
+            self.volume_again = true;
+            return Task::none();
+        }
+        self.volume_pending = true;
+        let started = Instant::now();
+        Task::perform(services::volume(), move |volume| {
+            Message::VolumeRead(started, volume)
+        })
+    }
+
+    /// Applies a volume or brightness read. A read that began before Frost
+    /// changed the level, or while a change is still in flight, carries a
+    /// stale value: keep ours and do not announce it as an external change.
+    fn level_read(
+        &mut self,
+        volume: bool,
+        started: Option<Instant>,
+        value: Option<Level>,
+    ) -> Task<Message> {
+        let (changed, busy) = if volume {
+            (
+                self.volume_changed,
+                self.volume_setting || self.volume_target.is_some(),
+            )
+        } else {
+            (
+                self.brightness_changed,
+                self.brightness_setting || self.brightness_target.is_some(),
+            )
+        };
+        let stale = self.adjusting
+            || busy
+            || changed.is_some_and(|changed| started.is_none_or(|started| started <= changed));
+        if stale {
+            return Task::none();
+        }
+        let current = if volume {
+            &mut self.snapshot.volume
+        } else {
+            &mut self.snapshot.brightness
+        };
+        let previous = std::mem::replace(current, value);
+        match (previous, value) {
+            (Some(previous), Some(next)) if previous != next => self.show_notice(Notice::level(
+                if volume { "Volume" } else { "Brightness" },
+                next,
+            )),
+            _ => Task::none(),
+        }
+    }
+
+    /// Re-reads the small state files shared with the other d77 shells.
+    fn refresh_files(&mut self) {
+        self.active_wallpaper = services::active_wallpaper();
+        // Do not let the tick overwrite an unsaved slider value.
+        if !self.theme_mix_dirty {
+            self.theme_mix = services::theme_mix();
+        }
+        self.window_counts = if self.native_workspaces.is_some() {
+            services::native_window_counts()
+        } else {
+            None
+        };
+        // Keep the palette steady while a wallpaper job rewrites palette.json.
+        if !self.wallpaper_busy {
+            self.palette = ui::Palette::resolve(self.active_wallpaper.as_deref(), self.theme_mix);
         }
     }
 
@@ -834,7 +986,7 @@ impl Frost {
                 services::adjust(control).await?;
                 Ok(
                     if matches!(control, Control::BrightnessUp | Control::BrightnessDown) {
-                        services::brightness().await
+                        services::brightness()
                     } else {
                         services::volume().await
                     },
@@ -956,6 +1108,12 @@ impl Frost {
     }
 
     fn dismiss(&mut self) -> Task<Message> {
+        // The slider's release event never arrives if the panel closes mid-drag.
+        if std::mem::take(&mut self.theme_mix_dirty)
+            && let Err(err) = services::save_theme_mix(self.theme_mix)
+        {
+            eprintln!("frost: could not save the theme mix: {err}");
+        }
         self.confirm = None;
         self.thumbnail_job = None;
         self.thumbnails.clear();
@@ -1031,7 +1189,7 @@ impl Frost {
     }
 
     fn reconcile_backdrops(&mut self) -> Task<Message> {
-        if services::active_wallpaper().is_some() {
+        if self.active_wallpaper.is_some() {
             return Task::batch(self.backdrops.drain().map(|(_, id)| window::close(id)));
         }
         let missing: Vec<_> = self
@@ -1083,7 +1241,7 @@ mod wallpaper_tests {
 
     #[test]
     fn rapid_selections_finish_with_the_last_wallpaper() {
-        let (mut frost, _) = Frost::new(shell::channel().1);
+        let (mut frost, _) = Frost::new(shell::channel().1, config::Config::default());
         let first = WallpaperChoice::Image(PathBuf::from("first.png"));
         let last = WallpaperChoice::Image(PathBuf::from("last.png"));
 
@@ -1099,5 +1257,67 @@ mod wallpaper_tests {
         let _ = frost.update(Message::WallpaperDone(last, Ok(String::new())));
         assert_eq!(frost.wallpaper_target, None);
         assert!(!frost.wallpaper_busy);
+    }
+}
+
+#[cfg(test)]
+mod level_tests {
+    use super::*;
+
+    fn volume(started: Instant, percent: u16) -> Message {
+        Message::VolumeRead(
+            started,
+            Some(Level {
+                percent,
+                muted: false,
+            }),
+        )
+    }
+
+    #[test]
+    fn stale_reads_do_not_override_a_slider_change_or_show_a_notice() {
+        let (mut frost, _) = Frost::new(shell::channel().1, config::Config::default());
+        let _ = frost.update(volume(Instant::now(), 30));
+        assert!(frost.notice.is_none());
+        let before_drag = Instant::now();
+
+        let _ = frost.update(Message::SetVolume(70));
+        // A read that began before the drag reports the old level.
+        let _ = frost.update(volume(before_drag, 30));
+        assert_eq!(frost.snapshot.volume.map(|level| level.percent), Some(70));
+        assert!(frost.notice.is_none());
+
+        let _ = frost.update(Message::LevelSet(
+            true,
+            70,
+            Ok(Some(Level {
+                percent: 70,
+                muted: false,
+            })),
+        ));
+        // Still stale: it began before the change completed.
+        let _ = frost.update(volume(before_drag, 30));
+        assert_eq!(frost.snapshot.volume.map(|level| level.percent), Some(70));
+        assert!(frost.notice.is_none());
+
+        // A fresh read with an external change is shown.
+        let _ = frost.update(volume(Instant::now(), 45));
+        assert_eq!(frost.snapshot.volume.map(|level| level.percent), Some(45));
+        assert!(frost.notice.is_some());
+    }
+
+    #[test]
+    fn workspace_refreshes_coalesce_while_a_read_is_pending() {
+        let (mut frost, _) = Frost::new(shell::channel().1, config::Config::default());
+        frost.compositor = Compositor::Sway;
+        let _ = frost.update(Message::WorkspacesDirty);
+        let _ = frost.update(Message::WorkspacesDirty);
+        let _ = frost.update(Message::WorkspacesDirty);
+        assert!(frost.workspaces_pending && frost.workspaces_again);
+        let _ = frost.update(Message::WorkspacesRead(Vec::new()));
+        // One follow-up read covers every event that arrived meanwhile.
+        assert!(frost.workspaces_pending && !frost.workspaces_again);
+        let _ = frost.update(Message::WorkspacesRead(Vec::new()));
+        assert!(!frost.workspaces_pending);
     }
 }

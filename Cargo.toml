@@ -2,6 +2,7 @@
 name = "frost-d77"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.95"
 description = "An Iced desktop shell for Wayland"
 license = "MIT"
 
@@ -10,7 +11,7 @@ name = "frost"
 path = "src/main.rs"
 
 [dependencies]
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "unstable-locales"] }
 freedesktop-desktop-entry = { version = "0.8", default-features = false }
 freedesktop-icons = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }

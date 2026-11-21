@@ -7,16 +7,22 @@ pkgdesc="Wayland desktop shell and session locker written in Rust"
 arch=('x86_64')
 url="https://github.com/dani-77/frost"
 license=('MIT')
-depends=('wayland' 'libglvnd' 'libxkbcommon' 'fontconfig' 'freetype2' 'pam' 'gcc-libs' 'glibc')
-makedepends=('cargo' 'pkgconf')
+depends=('wayland' 'libglvnd' 'libxkbcommon' 'fontconfig' 'freetype2' 'pam' 'gcc-libs' 'glibc'
+         'glib2')  # gio launches applications from the launcher
+makedepends=('cargo>=1.95' 'pkgconf')
 backup=('etc/pam.d/frost-locker')
 optdepends=(
   'wireplumber: volume controls'
+  'libpulse: react to volume changes with pactl instead of polling'
   'brightnessctl: brightness controls'
   'networkmanager: Wi-Fi status and nmtui'
   'power-profiles-daemon: power profile controls'
   'cmus: music controls'
+  'tmux: start cmus from the dashboard'
+  'screen: start cmus from the dashboard'
   'swww: wallpaper backend'
+  'awww: wallpaper backend'
+  'matugen: wallpaper-based color palette'
   'curl: weather forecast'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")

@@ -15,7 +15,7 @@ Frost is a Wayland shell in Rust inspired by [quickshell-d77](https://github.com
 
 ## Build and run
 
-Use a Wayland session with `zwlr_layer_shell_v1`. Building requires recent Rust and Cargo (validated with Rust 1.100.0), a C compiler, `pkg-config`, and development files for xkbcommon and Linux PAM.
+Use a Wayland session with `zwlr_layer_shell_v1`. Building requires Rust and Cargo 1.95 or newer, a C compiler, `pkg-config`, and development files for xkbcommon and Linux PAM.
 
 On Void Linux, install the build dependencies and `gio` for the launcher:
 
@@ -54,8 +54,8 @@ Versioned packaging recipes are in [`packaging/arch/PKGBUILD`](packaging/arch/PK
 | Launcher | `gio` |
 | Wi-Fi | `nmcli` or `iwgetid` for the SSID; route and state come from Linux |
 | Power profile | `powerprofilesctl` and a compatible Power Profiles API |
-| Volume | `wpctl` with PipeWire/WirePlumber |
-| Brightness | `brightnessctl` and a user-accessible backlight device |
+| Volume | `wpctl` with PipeWire/WirePlumber; `pactl` (optional) lets Frost react to changes instead of polling every second |
+| Brightness | `brightnessctl` and a user-accessible backlight device; the level is read from `/sys/class/backlight` |
 | Music | `cmus-remote`; `tmux` or `screen` to start cmus from the dashboard |
 | Wallpaper | `awww` or `swww` with its daemon running |
 | Dynamic palette | `matugen` (optional) |
