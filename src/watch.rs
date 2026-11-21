@@ -212,11 +212,7 @@ mod stream_tests {
             );
             let stream = watch(Some(source), |_| true);
             let start = tokio::time::Instant::now();
-            let events: Vec<_> = stream
-                .take(3)
-                .map(|()| start.elapsed())
-                .collect()
-                .await;
+            let events: Vec<_> = stream.take(3).map(|()| start.elapsed()).collect().await;
             // Initial refresh, one for the a/b/c burst, one for d.
             assert!(events[1] < Duration::from_millis(250), "{events:?}");
             assert!(events[2] >= Duration::from_millis(250), "{events:?}");
@@ -228,7 +224,10 @@ mod stream_tests {
         runtime().block_on(async {
             let source = Source::Command("frost-no-such-watcher", &[]);
             let start = tokio::time::Instant::now();
-            watch(Some(source), |_| true).take(2).collect::<Vec<_>>().await;
+            watch(Some(source), |_| true)
+                .take(2)
+                .collect::<Vec<_>>()
+                .await;
             let elapsed = start.elapsed();
             assert!(elapsed >= Duration::from_millis(900) && elapsed < Duration::from_secs(3));
         });

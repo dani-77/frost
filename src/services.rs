@@ -419,37 +419,51 @@ pub async fn music() -> Option<Music> {
     Some(music)
 }
 
+fn is_cmus(process: &Path) -> bool {
+    fs::read_to_string(process.join("comm"))
+        .ok()
+        .as_deref()
+        .map(str::trim)
+        == Some("cmus")
+}
+
+/// HOME and XDG_RUNTIME_DIR of the running cmus, so cmus-remote finds its
+/// socket. The process is cached and /proc is scanned only when it is gone.
 fn cmus_environment() -> HashMap<String, String> {
-    let mut result = HashMap::new();
+    static CACHE: std::sync::Mutex<Option<(PathBuf, HashMap<String, String>)>> =
+        std::sync::Mutex::new(None);
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((process, environment)) = cache.as_ref()
+        && is_cmus(process)
+    {
+        return environment.clone();
+    }
+    *cache = None;
     let Ok(entries) = fs::read_dir("/proc") else {
-        return result;
+        return HashMap::new();
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path
-            .file_name()
+    let Some(process) = entries.flatten().map(|entry| entry.path()).find(|path| {
+        path.file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.bytes().all(|b| b.is_ascii_digit()))
-            || fs::read_to_string(path.join("comm"))
-                .ok()
-                .as_deref()
-                .map(str::trim)
-                != Some("cmus")
-        {
-            continue;
-        }
-        if let Ok(data) = fs::read(path.join("environ")) {
-            for item in data.split(|byte| *byte == 0) {
-                for key in ["HOME", "XDG_RUNTIME_DIR"] {
-                    let prefix = format!("{key}=");
-                    if let Some(value) = item.strip_prefix(prefix.as_bytes()) {
-                        result.insert(key.into(), String::from_utf8_lossy(value).into_owned());
-                    }
+            && is_cmus(path)
+    }) else {
+        return HashMap::new();
+    };
+    let mut result = HashMap::new();
+    if let Ok(data) = fs::read(process.join("environ")) {
+        for item in data.split(|byte| *byte == 0) {
+            for key in ["HOME", "XDG_RUNTIME_DIR"] {
+                let prefix = format!("{key}=");
+                if let Some(value) = item.strip_prefix(prefix.as_bytes()) {
+                    result.insert(key.into(), String::from_utf8_lossy(value).into_owned());
                 }
             }
         }
-        break;
     }
+    *cache = Some((process, result.clone()));
     result
 }
 
