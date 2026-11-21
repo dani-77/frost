@@ -670,7 +670,14 @@ impl Session {
 }
 
 pub async fn lock() -> Result<String, String> {
-    let executable = env::current_exe().map_err(|err| format!("could not locate Frost: {err}"))?;
+    // After a package upgrade the running binary is unlinked and current_exe
+    // reports "/usr/bin/frost (deleted)"; /proc/self/exe still executes it.
+    let proc_exe = Path::new("/proc/self/exe");
+    let executable = if proc_exe.exists() {
+        proc_exe.to_owned()
+    } else {
+        env::current_exe().map_err(|err| format!("could not locate Frost: {err}"))?
+    };
     let output = tokio::process::Command::new(executable)
         .arg("lock")
         .stdin(std::process::Stdio::null())
