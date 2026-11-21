@@ -671,6 +671,7 @@ impl Frost {
             row![
                 p.label("Theme mix"),
                 slider(0.0..=1.0, self.theme_mix, Message::ThemeMix)
+                    .on_release(Message::ThemeMixRelease)
                     .step(0.01_f32)
                     .width(Length::Fill),
                 p.label(format!(

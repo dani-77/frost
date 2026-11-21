@@ -259,6 +259,7 @@ enum Message {
     WallpaperClear,
     WallpaperDone(WallpaperChoice, Result<String, String>),
     ThemeMix(f32),
+    ThemeMixRelease,
     Session(Session),
     Confirm(Session),
     Cancel,
@@ -281,6 +282,8 @@ struct Frost {
     /// File-backed state, refreshed on each tick so views never touch disk.
     active_wallpaper: Option<PathBuf>,
     theme_mix: f32,
+    /// The slider moved since the theme mix was last saved.
+    theme_mix_dirty: bool,
     window_counts: Option<HashMap<String, u32>>,
     confirm: Option<Session>,
     apps: Vec<App>,
@@ -330,6 +333,7 @@ impl Frost {
             palette: ui::Palette::load(),
             active_wallpaper: None,
             theme_mix: 1.0,
+            theme_mix_dirty: false,
             window_counts: None,
             confirm: None,
             apps: Vec::new(),
@@ -760,10 +764,22 @@ impl Frost {
                 Task::batch([backdrops, notice])
             }
             Message::ThemeMix(value) => {
-                if let Err(err) = services::save_theme_mix(value) {
+                // Preview in memory while dragging; the file is written on release.
+                self.theme_mix = value.clamp(0.0, 1.0);
+                self.theme_mix_dirty = true;
+                if !self.wallpaper_busy {
+                    self.palette =
+                        ui::Palette::resolve(self.active_wallpaper.as_deref(), self.theme_mix);
+                }
+                Task::none()
+            }
+            Message::ThemeMixRelease => {
+                if !std::mem::take(&mut self.theme_mix_dirty) {
+                    return Task::none();
+                }
+                if let Err(err) = services::save_theme_mix(self.theme_mix) {
                     return self.error(err);
                 }
-                self.refresh_files();
                 Task::none()
             }
             Message::Session(Session::Lock) => {
@@ -818,7 +834,10 @@ impl Frost {
     /// Re-reads the small state files shared with the other d77 shells.
     fn refresh_files(&mut self) {
         self.active_wallpaper = services::active_wallpaper();
-        self.theme_mix = services::theme_mix();
+        // Do not let the tick overwrite an unsaved slider value.
+        if !self.theme_mix_dirty {
+            self.theme_mix = services::theme_mix();
+        }
         self.window_counts = if self.native_workspaces.is_some() {
             services::native_window_counts()
         } else {
@@ -977,6 +996,12 @@ impl Frost {
     }
 
     fn dismiss(&mut self) -> Task<Message> {
+        // The slider's release event never arrives if the panel closes mid-drag.
+        if std::mem::take(&mut self.theme_mix_dirty)
+            && let Err(err) = services::save_theme_mix(self.theme_mix)
+        {
+            eprintln!("frost: could not save the theme mix: {err}");
+        }
         self.confirm = None;
         self.thumbnail_job = None;
         self.thumbnails.clear();
