@@ -73,7 +73,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let socket = ipc::Socket::bind()?;
             let (shell_broadcast, shell_events) = shell::channel();
             daemon(
-                move || Frost::new(shell_events.clone()),
+                {
+                    let config = config.clone();
+                    move || Frost::new(shell_events.clone(), config.clone())
+                },
                 "frost",
                 Frost::update,
                 Frost::view,
@@ -328,9 +331,9 @@ struct Frost {
 }
 
 impl Frost {
-    fn new(shell_events: ShellReceiver) -> (Self, Task<Message>) {
+    fn new(shell_events: ShellReceiver, config: config::Config) -> (Self, Task<Message>) {
         let mut frost = Self {
-            config: config::Config::load(),
+            config,
             compositor: Compositor::detect(),
             shell_events,
             native_workspaces: None,
@@ -383,7 +386,17 @@ impl Frost {
             clock: chrono::Local::now(),
         };
         frost.refresh_files();
-        let poll = Task::batch([frost.poll(), frost.poll_bar()]);
+        let warnings = std::mem::take(&mut frost.config.warnings);
+        let warning = if warnings.is_empty() {
+            Task::none()
+        } else {
+            frost.show_notice(Notice {
+                title: "Configuration problem".into(),
+                detail: warnings.join("; "),
+                level: None,
+            })
+        };
+        let poll = Task::batch([frost.poll(), frost.poll_bar(), warning]);
         (frost, poll)
     }
 
@@ -568,9 +581,10 @@ impl Frost {
                 self.power_pending = true;
                 Task::perform(telemetry::PowerProfiles::cycle(), Message::PowerChanged)
             }
-            Message::OpenNetwork => Task::perform(services::open_nmtui(), |result| {
-                Message::Finished(result, None)
-            }),
+            Message::OpenNetwork => Task::perform(
+                services::open_nmtui(self.config.terminal.clone()),
+                |result| Message::Finished(result, None),
+            ),
             Message::PowerChanged(result) => {
                 self.power_pending = false;
                 self.power_checked = Some(Instant::now());
@@ -640,9 +654,10 @@ impl Frost {
                 self.selected = 0;
                 self.reveal_selection(0)
             }
-            Message::Launch(path) => Task::perform(services::launch(path), |result| {
-                Message::Finished(result, Some(""))
-            }),
+            Message::Launch(path) => Task::perform(
+                services::launch(path, self.config.terminal.clone()),
+                |result| Message::Finished(result, Some("")),
+            ),
             Message::Switch(workspace) => {
                 Task::perform(services::switch(self.compositor, workspace), |result| {
                     Message::Finished(result, None)
@@ -1226,7 +1241,7 @@ mod wallpaper_tests {
 
     #[test]
     fn rapid_selections_finish_with_the_last_wallpaper() {
-        let (mut frost, _) = Frost::new(shell::channel().1);
+        let (mut frost, _) = Frost::new(shell::channel().1, config::Config::default());
         let first = WallpaperChoice::Image(PathBuf::from("first.png"));
         let last = WallpaperChoice::Image(PathBuf::from("last.png"));
 
@@ -1261,7 +1276,7 @@ mod level_tests {
 
     #[test]
     fn stale_reads_do_not_override_a_slider_change_or_show_a_notice() {
-        let (mut frost, _) = Frost::new(shell::channel().1);
+        let (mut frost, _) = Frost::new(shell::channel().1, config::Config::default());
         let _ = frost.update(volume(Instant::now(), 30));
         assert!(frost.notice.is_none());
         let before_drag = Instant::now();
@@ -1293,7 +1308,7 @@ mod level_tests {
 
     #[test]
     fn workspace_refreshes_coalesce_while_a_read_is_pending() {
-        let (mut frost, _) = Frost::new(shell::channel().1);
+        let (mut frost, _) = Frost::new(shell::channel().1, config::Config::default());
         frost.compositor = Compositor::Sway;
         let _ = frost.update(Message::WorkspacesDirty);
         let _ = frost.update(Message::WorkspacesDirty);

@@ -401,7 +401,10 @@ mod tests {
             .write()
             .unwrap()
             .load_font(media::SYMBOLS.into());
-        let (mut frost, _tasks) = Frost::new(iced_wayland_subscriber::shell::channel().1);
+        let (mut frost, _tasks) = Frost::new(
+            iced_wayland_subscriber::shell::channel().1,
+            crate::config::Config::default(),
+        );
         frost.cpu_usage = Some(54);
         frost.snapshot.memory = Some(68);
         frost.snapshot.battery = Some(crate::services::Battery {

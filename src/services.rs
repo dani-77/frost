@@ -779,7 +779,7 @@ async fn power(method: &str) -> Result<String, String> {
     .await
 }
 
-pub async fn launch(path: PathBuf) -> Result<String, String> {
+pub async fn launch(path: PathBuf, terminal: Option<String>) -> Result<String, String> {
     let locales = get_languages_from_env();
     if let Ok(entry) = DesktopEntry::from_path(&path, Some(&locales))
         && entry.terminal()
@@ -787,7 +787,7 @@ pub async fn launch(path: PathBuf) -> Result<String, String> {
         let argv = entry
             .parse_exec()
             .map_err(|err| format!("desktop Exec: {err}"))?;
-        return spawn_in_terminal(&argv);
+        return spawn_in_terminal(terminal, &argv);
     }
     let status = tokio::time::timeout(
         Duration::from_secs(3),
@@ -809,13 +809,12 @@ pub async fn launch(path: PathBuf) -> Result<String, String> {
     }
 }
 
-pub async fn open_nmtui() -> Result<String, String> {
-    spawn_in_terminal(&["nmtui".into()])
+pub async fn open_nmtui(terminal: Option<String>) -> Result<String, String> {
+    spawn_in_terminal(terminal, &["nmtui".into()])
 }
 
-fn spawn_in_terminal(argv: &[String]) -> Result<String, String> {
-    let preferred = crate::config::Config::load()
-        .terminal
+fn spawn_in_terminal(terminal: Option<String>, argv: &[String]) -> Result<String, String> {
+    let preferred = terminal
         .filter(|name| executable(name))
         .or_else(|| env::var("TERMINAL").ok().filter(|name| executable(name)));
     let program = preferred

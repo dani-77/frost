@@ -765,7 +765,10 @@ mod tests {
 
     #[test]
     fn backdrop_renders_the_owl_in_the_lower_left_corner() {
-        let (frost, _tasks) = Frost::new(iced_wayland_subscriber::shell::channel().1);
+        let (frost, _tasks) = Frost::new(
+            iced_wayland_subscriber::shell::channel().1,
+            crate::config::Config::default(),
+        );
         let theme = frost.palette.theme();
         for scale in [1_usize, 2] {
             let width = 1000 * scale;
@@ -809,7 +812,10 @@ mod tests {
 
     #[test]
     fn dashboard_actions_fit_without_scrolling() {
-        let (mut frost, _tasks) = Frost::new(iced_wayland_subscriber::shell::channel().1);
+        let (mut frost, _tasks) = Frost::new(
+            iced_wayland_subscriber::shell::channel().1,
+            crate::config::Config::default(),
+        );
         frost.snapshot.music = Some(crate::services::Music {
             title: "A long example track title".into(),
             artist: "An artist".into(),
@@ -851,7 +857,10 @@ mod tests {
         let source = ::image::RgbaImage::from_pixel(570, 390, ::image::Rgba(marker));
         source.save(&file).unwrap();
 
-        let (mut frost, _tasks) = Frost::new(iced_wayland_subscriber::shell::channel().1);
+        let (mut frost, _tasks) = Frost::new(
+            iced_wayland_subscriber::shell::channel().1,
+            crate::config::Config::default(),
+        );
         frost.apps.push(App {
             name: "Sample application".into(),
             detail: String::new(),
