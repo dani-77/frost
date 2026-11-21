@@ -31,7 +31,7 @@ On Arch Linux, install the matching build tools and clipboard tools before build
 sudo pacman -S --needed base-devel rust cargo pkgconf libxkbcommon pam glib2 cliphist wl-clipboard xdg-utils
 ```
 
-The bar's system monitor also needs `eww` and `dgop`. On Void with the d77 repository enabled, install them with `sudo xbps-install -S eww dgop`; on Arch, use `sudo pacman -S eww dgop` where both packages are available. The monitor calls dgop's JSON CLI when open and does not start its HTTP server.
+The bar's system monitor also needs `eww` and `dgop`. On Void with the d77 repository enabled, install them with `sudo xbps-install -S eww dgop`. On Arch, install `dgop` with `sudo pacman -S dgop` and `eww` from the AUR. The `frost-d77` AUR package declares both dependencies. The monitor calls dgop's JSON CLI when open and does not start its HTTP server.
 
 For notifications, install and run **one** daemon: `dunst` or `swaync` (SwayNotificationCenter). Frost uses the daemon already running in your Wayland session. On Void, `sudo xbps-install -S dunst` installs Dunst; SwayNotificationCenter needs a repository that provides `swaync`. On Arch, install either with `sudo pacman -S dunst` or `sudo pacman -S swaync`. Do not start both notification daemons in the same session.
 
@@ -59,7 +59,7 @@ sudo make install
 
 This installs `/usr/bin/frost`, `/usr/bin/d77-monitor`, the shared Eww configuration at `/usr/share/d77-monitor`, a PAM policy at `/etc/pam.d/frost-locker`, the example configuration at `/usr/share/frost/config.example.toml`, and the licenses under `/usr/share/licenses/frost`. The Makefile detects Void, Arch, Debian derivatives, and Chimera (including hybrid-d77 through `ID_LIKE`) from `/etc/os-release`. Override the choice when staging for another system, for example `make install DESTDIR=/tmp/frost-package PAM_VARIANT=chimera`. The Chimera policy follows hybrid-d77's local `pam_unix.so` authentication and adds the account rule required by Frost. `PREFIX` defaults to `/usr`; `DESTDIR` stages an install for packaging. Run `sudo make uninstall` to remove the installed files. If `~/.cargo/bin` precedes `/usr/bin` in `PATH`, `frost` still resolves to the user-installed copy; check with `command -v frost`.
 
-Versioned packaging recipes are in [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD) and [`packaging/void/template`](packaging/void/template). Both use the `v0.1.0` source tag and install the distribution-specific PAM policy.
+Versioned packaging recipes are in [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD) and [`packaging/void/template`](packaging/void/template). Both use a release source tag and install the distribution-specific PAM policy, monitor script, and Eww configuration.
 
 | Integration | Runtime dependency |
 | --- | --- |
