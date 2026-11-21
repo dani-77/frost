@@ -192,10 +192,13 @@ struct Snapshot {
     memory: Option<u16>,
     cpu: Option<telemetry::Cpu>,
     load: Option<String>,
+    /// When this read began; older reads must not override local changes.
+    started: Option<Instant>,
 }
 
 impl Snapshot {
     async fn read(compositor: Compositor, dashboard: bool) -> Self {
+        let started = Instant::now();
         let music = async {
             if dashboard {
                 services::music().await
@@ -218,6 +221,7 @@ impl Snapshot {
             memory: services::memory(),
             cpu: telemetry::Cpu::read(),
             load: services::load(),
+            started: Some(started),
         }
     }
 }
@@ -313,6 +317,9 @@ struct Frost {
     brightness_target: Option<u16>,
     volume_setting: bool,
     brightness_setting: bool,
+    /// Last time Frost itself changed the volume or brightness.
+    volume_changed: Option<Instant>,
+    brightness_changed: Option<Instant>,
     refreshing: bool,
     clock: chrono::DateTime<chrono::Local>,
 }
@@ -363,6 +370,8 @@ impl Frost {
             brightness_target: None,
             volume_setting: false,
             brightness_setting: false,
+            volume_changed: None,
+            brightness_changed: None,
             refreshing: false,
             clock: chrono::Local::now(),
         };
@@ -488,16 +497,37 @@ impl Frost {
                     self.reconcile_backdrops(),
                 ])
             }
-            Message::Snapshot(snapshot) => {
+            Message::Snapshot(mut snapshot) => {
                 self.refreshing = false;
-                let notice = if !self.adjusting
-                    && let (Some(previous), Some(next)) = (self.snapshot.volume, snapshot.volume)
+                // A read that began before Frost changed a level, or while a
+                // change is still in flight, carries a stale value: keep ours
+                // and do not announce it as an external change.
+                let stale = |changed: Option<Instant>, busy: bool| {
+                    busy || changed.is_some_and(|changed| {
+                        snapshot.started.is_none_or(|started| started <= changed)
+                    })
+                };
+                let volume_stale = stale(
+                    self.volume_changed,
+                    self.adjusting || self.volume_setting || self.volume_target.is_some(),
+                );
+                let brightness_stale = stale(
+                    self.brightness_changed,
+                    self.adjusting || self.brightness_setting || self.brightness_target.is_some(),
+                );
+                if volume_stale {
+                    snapshot.volume = self.snapshot.volume;
+                }
+                if brightness_stale {
+                    snapshot.brightness = self.snapshot.brightness;
+                }
+                let notice = if let (Some(previous), Some(next)) =
+                    (self.snapshot.volume, snapshot.volume)
                     && previous != next
                 {
                     Some(Notice::level("Volume", next))
-                } else if !self.adjusting
-                    && let (Some(previous), Some(next)) =
-                        (self.snapshot.brightness, snapshot.brightness)
+                } else if let (Some(previous), Some(next)) =
+                    (self.snapshot.brightness, snapshot.brightness)
                     && previous != next
                 {
                     Some(Notice::level("Brightness", next))
@@ -509,16 +539,6 @@ impl Frost {
                     .zip(self.snapshot.cpu)
                     .and_then(|(current, previous)| current.usage(previous));
                 self.snapshot = snapshot;
-                if let Some(target) = self.volume_target
-                    && let Some(level) = &mut self.snapshot.volume
-                {
-                    level.percent = target;
-                }
-                if let Some(target) = self.brightness_target
-                    && let Some(level) = &mut self.snapshot.brightness
-                {
-                    level.percent = target;
-                }
                 notice.map_or_else(Task::none, |notice| self.show_notice(notice))
             }
             Message::Network(network) => {
@@ -664,6 +684,7 @@ impl Frost {
                 self.next_control()
             }
             Message::SetVolume(value) => {
+                self.volume_changed = Some(Instant::now());
                 self.volume_target = Some(value.min(100));
                 if let Some(level) = &mut self.snapshot.volume {
                     level.percent = value.min(100);
@@ -671,6 +692,7 @@ impl Frost {
                 self.next_level(true)
             }
             Message::SetBrightness(value) => {
+                self.brightness_changed = Some(Instant::now());
                 self.brightness_target = Some(value.clamp(1, 100));
                 if let Some(level) = &mut self.snapshot.brightness {
                     level.percent = value.clamp(1, 100);
@@ -680,8 +702,10 @@ impl Frost {
             Message::LevelSet(volume, sent, result) => {
                 if volume {
                     self.volume_setting = false;
+                    self.volume_changed = Some(Instant::now());
                 } else {
                     self.brightness_setting = false;
+                    self.brightness_changed = Some(Instant::now());
                 }
                 match result {
                     Ok(level) => {
@@ -717,10 +741,12 @@ impl Frost {
                     Ok(Some(level))
                         if matches!(control, Control::BrightnessUp | Control::BrightnessDown) =>
                     {
+                        self.brightness_changed = Some(Instant::now());
                         self.snapshot.brightness = Some(level);
                         self.show_notice(Notice::level("Brightness", level))
                     }
                     Ok(Some(level)) => {
+                        self.volume_changed = Some(Instant::now());
                         self.snapshot.volume = Some(level);
                         self.show_notice(Notice::level("Volume", level))
                     }
@@ -1145,5 +1171,52 @@ mod wallpaper_tests {
         let _ = frost.update(Message::WallpaperDone(last, Ok(String::new())));
         assert_eq!(frost.wallpaper_target, None);
         assert!(!frost.wallpaper_busy);
+    }
+}
+
+#[cfg(test)]
+mod level_tests {
+    use super::*;
+
+    fn read_at(started: Instant, percent: u16) -> Snapshot {
+        Snapshot {
+            volume: Some(Level {
+                percent,
+                muted: false,
+            }),
+            started: Some(started),
+            ..Snapshot::default()
+        }
+    }
+
+    #[test]
+    fn stale_reads_do_not_override_a_slider_change_or_show_a_notice() {
+        let (mut frost, _) = Frost::new(shell::channel().1);
+        let _ = frost.update(Message::Snapshot(read_at(Instant::now(), 30)));
+        let before_drag = Instant::now();
+
+        let _ = frost.update(Message::SetVolume(70));
+        // A read that began before the drag reports the old level.
+        let _ = frost.update(Message::Snapshot(read_at(before_drag, 30)));
+        assert_eq!(frost.snapshot.volume.map(|level| level.percent), Some(70));
+        assert!(frost.notice.is_none());
+
+        let _ = frost.update(Message::LevelSet(
+            true,
+            70,
+            Ok(Some(Level {
+                percent: 70,
+                muted: false,
+            })),
+        ));
+        // Still stale: it began before the change completed.
+        let _ = frost.update(Message::Snapshot(read_at(before_drag, 30)));
+        assert_eq!(frost.snapshot.volume.map(|level| level.percent), Some(70));
+        assert!(frost.notice.is_none());
+
+        // A fresh read with an external change is shown.
+        let _ = frost.update(Message::Snapshot(read_at(Instant::now(), 45)));
+        assert_eq!(frost.snapshot.volume.map(|level| level.percent), Some(45));
+        assert!(frost.notice.is_some());
     }
 }

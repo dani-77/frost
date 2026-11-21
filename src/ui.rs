@@ -674,10 +674,7 @@ impl Frost {
                     .on_release(Message::ThemeMixRelease)
                     .step(0.01_f32)
                     .width(Length::Fill),
-                p.label(format!(
-                    "{}%",
-                    (self.theme_mix * 100.0).round() as u32
-                ))
+                p.label(format!("{}%", (self.theme_mix * 100.0).round() as u32))
             ]
             .spacing(8)
             .align_y(Alignment::Center),
