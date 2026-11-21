@@ -300,15 +300,27 @@ pub async fn volume() -> Option<Level> {
 const BACKLIGHT: &str = "/sys/class/backlight";
 
 /// The backlight Frost reads and passes to brightnessctl, so both agree on
-/// the device when a laptop exposes several.
+/// the device when a laptop exposes several. Follows the kernel's documented
+/// preference (firmware, then platform, then raw), then the name.
 fn backlight_device() -> Option<String> {
-    let mut names: Vec<_> = fs::read_dir(BACKLIGHT)
+    preferred_backlight(Path::new(BACKLIGHT))
+}
+
+fn preferred_backlight(class: &Path) -> Option<String> {
+    let rank = |name: &str| match fs::read_to_string(class.join(name).join("type"))
+        .unwrap_or_default()
+        .trim()
+    {
+        "firmware" => 0,
+        "platform" => 1,
+        "raw" => 2,
+        _ => 3,
+    };
+    fs::read_dir(class)
         .ok()?
         .flatten()
         .filter_map(|entry| entry.file_name().into_string().ok())
-        .collect();
-    names.sort();
-    names.into_iter().next()
+        .min_by_key(|name| (rank(name), name.clone()))
 }
 
 /// Reads the backlight from sysfs, without starting a process.
@@ -671,6 +683,23 @@ mod battery_tests {
         fs::write(path.join("max_brightness"), "0\n").unwrap();
         assert!(brightness_at(&path).is_none());
         fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn prefers_firmware_then_platform_then_raw_backlights() {
+        let class = env::temp_dir().join(format!("frost-backlight-class-{}", std::process::id()));
+        for (name, kind) in [("acpi_video0", "raw"), ("intel_backlight", "platform")] {
+            fs::create_dir_all(class.join(name)).unwrap();
+            fs::write(class.join(name).join("type"), format!("{kind}\n")).unwrap();
+        }
+        assert_eq!(
+            preferred_backlight(&class).as_deref(),
+            Some("intel_backlight")
+        );
+        fs::create_dir_all(class.join("zfirmware")).unwrap();
+        fs::write(class.join("zfirmware/type"), "firmware\n").unwrap();
+        assert_eq!(preferred_backlight(&class).as_deref(), Some("zfirmware"));
+        fs::remove_dir_all(class).unwrap();
     }
 
     #[test]

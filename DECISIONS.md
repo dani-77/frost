@@ -22,7 +22,7 @@
 
 ## Polling and events
 
-- The one-second tick reads only local files: clock, CPU, memory, load, battery, and backlight (from `/sys/class/backlight`, using the first device by name, which Frost also passes to `brightnessctl -d`). Music is read only while the dashboard is open.
+- The one-second tick reads only local files: clock, CPU, memory, load, battery, and backlight (from `/sys/class/backlight`, choosing the device by the kernel's preference of `firmware`, `platform`, then `raw`, which Frost also passes to `brightnessctl -d`). Music is read only while the dashboard is open.
 - Workspaces refresh on compositor events: `swaymsg -t subscribe`, Hyprland's `.socket2.sock`, and `niri msg event-stream`. Volume refreshes on `pactl subscribe` sink and server events. Bursts within 40 ms produce one read.
 - When an event source is missing or exits, Frost polls it every second and tries the source again after 30 seconds, so it never does worse than plain polling.
 - A volume or brightness read that started before Frost's own last change, or while a change is in flight, is discarded so it cannot revert the slider or show a stale OSD.
