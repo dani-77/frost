@@ -1,7 +1,7 @@
 mod bar;
 
 use crate::{
-    Frost, LAUNCHER_INPUT, Message, Notice, Panel,
+    CLIPBOARD_INPUT, Frost, LAUNCHER_INPUT, Message, Notice, Panel,
     services::{Control, Level, Session},
 };
 use iced::{
@@ -394,6 +394,7 @@ impl Frost {
         .align_y(Alignment::Center);
         let content = match panel {
             Panel::Launcher => self.launcher(),
+            Panel::Clipboard => self.clipboard_view(),
             Panel::Dashboard => self.dashboard(),
             Panel::Wallpaper => self.wallpaper(),
             Panel::Session => self.session_view(),
@@ -467,6 +468,114 @@ impl Frost {
                 .id("frost-app-list")
                 .height(Length::Fill),
             p.label("↑ ↓ Select    Enter Open    Esc Close"),
+        ]
+        .spacing(9)
+        .height(Length::Fill)
+        .into()
+    }
+
+    fn clipboard_view(&self) -> Element<'_, Message> {
+        let p = self.palette;
+        let mut input = text_input("Search clipboard history", &self.clipboard_query)
+            .id(CLIPBOARD_INPUT)
+            .on_input(Message::ClipboardSearch)
+            .padding(11)
+            .size(15);
+        if let Some(entry) = self.clipboard_matches().nth(self.clipboard_selected) {
+            input = input.on_submit(Message::ClipboardRestore(entry.id));
+        }
+
+        let mut items = column![].spacing(4);
+        let mut count = 0;
+        for (index, entry) in self.clipboard_matches().take(80).enumerate() {
+            let focused = index == self.clipboard_selected;
+            let preview = if entry.preview.trim().is_empty() {
+                "Empty clipboard item".to_owned()
+            } else {
+                shortened(&entry.preview, 90)
+            };
+            let thumb: Element<'_, Message> =
+                if let Some(handle) = self.clipboard_thumbnails.get(&entry.id) {
+                    image(handle.clone())
+                        .width(48)
+                        .height(48)
+                        .content_fit(ContentFit::Contain)
+                        .into()
+                } else {
+                    container(icon(
+                        if entry.is_image() { "󰋩" } else { "󰅍" },
+                        24,
+                        if focused { p.on_ice } else { p.ice },
+                    ))
+                    .center_x(48)
+                    .center_y(48)
+                    .into()
+                };
+            let detail = if entry.is_image() {
+                "Image • Select to copy"
+            } else {
+                "Text • Select to copy"
+            };
+            items = items.push(
+                p.button(
+                    row![
+                        thumb,
+                        column![
+                            heading(preview, 14),
+                            text(detail)
+                                .size(11)
+                                .color(if focused { p.on_ice } else { p.muted }),
+                        ]
+                        .spacing(3),
+                    ]
+                    .spacing(10)
+                    .align_y(Alignment::Center),
+                    focused,
+                )
+                .padding([5, 9])
+                .height(58)
+                .width(Length::Fill)
+                .on_press(Message::ClipboardRestore(entry.id)),
+            );
+            count += 1;
+        }
+        if count == 0 {
+            let message = if let Some(err) = &self.clipboard_error {
+                format!("Clipboard unavailable: {err}")
+            } else if self.clipboard_loading {
+                "Loading clipboard history…".into()
+            } else if self.clipboard_query.is_empty() {
+                "Clipboard history is empty".into()
+            } else {
+                "No matching clipboard items".into()
+            };
+            items = items.push(container(p.label(message)).padding(10));
+        }
+        let footer: Element<'_, Message> = if self.clipboard_confirm_clear {
+            row![
+                p.label("Clear the whole history?").width(Length::Fill),
+                p.action("Cancel", Message::ClipboardCancelClear),
+                p.action("Clear", Message::ClipboardConfirmClear),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into()
+        } else {
+            row![
+                p.label("↑ ↓ Select    Enter Copy    Esc Close")
+                    .width(Length::Fill),
+                p.action("Clear history", Message::ClipboardClear),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into()
+        };
+        column![
+            input,
+            scrollable(items.padding([2, 5]))
+                .id("frost-clipboard-list")
+                .height(Length::Fill),
+            footer,
         ]
         .spacing(9)
         .height(Length::Fill)
@@ -889,7 +998,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_a_desktop_icon_and_a_wallpaper_thumbnail() {
+    fn renders_desktop_clipboard_and_wallpaper_images() {
         let file =
             std::env::temp_dir().join(format!("frost-visual-test-{}.png", std::process::id()));
         let marker = [244, 60, 133, 255];
@@ -910,8 +1019,22 @@ mod tests {
         frost.wallpaper_files.push(file.clone());
         frost.thumbnails.push(crate::media::thumbnail(&file));
         assert!(frost.thumbnails[0].is_some());
+        frost.clipboard_entries.push(crate::clipboard::Entry {
+            id: 42,
+            mime: "image/png".into(),
+            format: "png".into(),
+            preview: "[[ binary data png 570x390 ]]".into(),
+        });
+        frost.clipboard_thumbnails.insert(
+            42,
+            crate::media::thumbnail(&file).expect("test image should decode"),
+        );
 
-        for (panel, width, height) in [(Panel::Launcher, 520, 470), (Panel::Wallpaper, 550, 480)] {
+        for (panel, width, height) in [
+            (Panel::Launcher, 520, 470),
+            (Panel::Clipboard, 520, 500),
+            (Panel::Wallpaper, 550, 480),
+        ] {
             let viewport = Viewport::with_physical_size(Size::new(width, height), 1.0);
             let theme = frost.palette.theme();
             let mut renderer = iced::Renderer::Secondary(Renderer::new(Font::DEFAULT, 16.0.into()));

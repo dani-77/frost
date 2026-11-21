@@ -26,6 +26,7 @@
 - Workspaces refresh on compositor events: `swaymsg -t subscribe`, Hyprland's `.socket2.sock`, and `niri msg event-stream`. Volume refreshes on `pactl subscribe` sink and server events. Bursts within 40 ms produce one read.
 - When an event source is missing or exits, Frost polls it every second and tries the source again after 30 seconds, so it never does worse than plain polling.
 - A volume or brightness read that started before Frost's own last change, or while a change is in flight, is discarded so it cannot revert the slider or show a stale OSD.
+- Failed volume reads share one pending retry timer. The fallback polling can fail repeatedly while audio is absent, so each failure must not schedule another timer.
 
 ## Dashboard and terminal
 
@@ -34,6 +35,11 @@
 - Volume and brightness sliders apply the latest requested value in sequence, so a rapid drag cannot leave an older value applied last.
 - The launcher honors `Terminal=true` desktop entries. It and the `nmtui` button resolve a terminal in the same order: Frost config, `TERMINAL`, `xdg-terminal-exec`, then installed terminals.
 - `~/.config/frost/config.toml` can set bar height and margin, visible bar modules, terminal executable, and weather location. Defaults preserve the original layout, and the configured terminal takes priority over `TERMINAL`.
+
+## Clipboard
+
+- `frost clipboard` opens a separate panel with no bar module. It reads the cliphist database only when opened, searches previews and MIME types, and restores selected data through `wl-copy`.
+- The panel shows image thumbnails for visible matches, limits background decoding, and asks before `cliphist wipe`. It does not start another history daemon; the compositor runs the text and image `wl-paste --watch cliphist store` jobs once per session.
 
 ## Installation
 

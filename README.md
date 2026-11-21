@@ -4,10 +4,11 @@
 
 Frost is a Wayland shell in Rust inspired by [quickshell-d77](https://github.com/dani-77/quickshell-d77/tree/5b5a1b5560a676339d31e6361650b6a5e8899a37). Its panels use layer shell through `iced_exwlshell`; the locker uses Wayland session lock surfaces through Smithay Client Toolkit. Both are drawn with Iced 0.14 and Tiny Skia.
 
-| Component | Frost 0.1 |
+| Component | Current development branch |
 | --- | --- |
 | Bar | A floating bar per output with CPU, RAM, network, power profile, battery, clock, and workspaces. Click the battery to switch between percentage and estimated time; systems without a built-in battery omit it. Sway, Hyprland, and niri use their IPC; other compositors can use `ext-workspace-v1`. |
 | Launcher | Searches XDG `.desktop` entries with application icons. Arrow keys select, Enter launches, and Esc closes. `Terminal=true` uses the configured terminal. |
+| Clipboard | Searches cliphist history, previews images, restores an item to the clipboard, and clears the history after confirmation. Opens with `frost clipboard`; no bar module is needed. |
 | Dashboard | CPU, memory, load, battery, weather, volume and brightness sliders, cmus controls, and session actions in a single view without scrolling. |
 | OSD | Shows volume and brightness changes. Media keys can call Frost directly. |
 | Wallpaper | Previews images in `~/Wallpaper`, applies them through `awww` or `swww`, generates a Matugen palette, and shows a backdrop when no wallpaper is active. |
@@ -17,10 +18,16 @@ Frost is a Wayland shell in Rust inspired by [quickshell-d77](https://github.com
 
 Use a Wayland session with `zwlr_layer_shell_v1`. Building requires Rust and Cargo 1.95 or newer, a C compiler, `pkg-config`, and development files for xkbcommon and Linux PAM.
 
-On Void Linux, install the build dependencies and `gio` for the launcher:
+On Void Linux, install the build dependencies, `gio` for the launcher, and the clipboard tools:
 
 ```sh
-sudo xbps-install -S rust cargo base-devel pkg-config libxkbcommon-devel pam-devel glib
+sudo xbps-install -S rust cargo base-devel pkg-config libxkbcommon-devel pam-devel glib cliphist wl-clipboard xdg-utils
+```
+
+On Arch Linux, install the matching build tools and clipboard tools before building from GitHub:
+
+```sh
+sudo pacman -S --needed base-devel rust cargo pkgconf libxkbcommon pam glib2 cliphist wl-clipboard xdg-utils
 ```
 
 From the project root:
@@ -52,6 +59,7 @@ Versioned packaging recipes are in [`packaging/arch/PKGBUILD`](packaging/arch/PK
 | Integration | Runtime dependency |
 | --- | --- |
 | Launcher | `gio` |
+| Clipboard | `cliphist` for history, `wl-clipboard` for capture and restoration, and `xdg-utils` for MIME inference with older cliphist versions |
 | Wi-Fi | `nmcli` or `iwgetid` for the SSID; route and state come from Linux |
 | Power profile | `powerprofilesctl` and a compatible Power Profiles API |
 | Volume | `wpctl` with PipeWire/WirePlumber; `pactl` (optional) lets Frost react to changes instead of polling every second |
@@ -72,6 +80,7 @@ Panel commands contact the Frost instance on the current Wayland display. `frost
 # ~/.config/sway/config
 exec frost run
 bindsym $mod+d exec frost launcher
+bindsym $mod+v exec frost clipboard
 bindsym $mod+i exec frost dashboard
 bindsym $mod+y exec frost wallpaper
 bindsym $mod+Shift+e exec frost session
@@ -84,6 +93,15 @@ bindsym XF86MonBrightnessDown exec frost brightness-down
 ```
 
 The same commands work with other compositors. `frost close` closes the open panel. Run `frost --help` for the complete command list.
+
+To collect text and images, start these two watchers once per Wayland session in your compositor's autostart:
+
+```sh
+wl-paste --type text --watch cliphist store
+wl-paste --type image --watch cliphist store
+```
+
+If your session already runs cliphist watchers, keep its existing setup. Frost only reads the history when the panel opens. Search with the input field; click an item or press Enter to put it back on the clipboard. The **Clear history** action asks for confirmation. Image thumbnails are loaded in the background, and the panel shows up to 80 matching entries at once.
 
 ## Locker
 

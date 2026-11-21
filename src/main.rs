@@ -1,3 +1,4 @@
+mod clipboard;
 mod config;
 mod ipc;
 mod lock;
@@ -39,6 +40,7 @@ use std::{
 };
 
 const LAUNCHER_INPUT: &str = "frost-search";
+const CLIPBOARD_INPUT: &str = "frost-clipboard-search";
 
 /// Delay before re-reading a volume that could not be read, e.g. while
 /// WirePlumber is still starting with the session and no event will follow.
@@ -54,7 +56,8 @@ enum WallpaperChoice {
     Clear,
 }
 
-const HELP: &str = "Usage: frost [run | launcher | dashboard | wallpaper | session | close | lock |
+const HELP: &str =
+    "Usage: frost [run | launcher | clipboard | dashboard | wallpaper | session | close | lock |
               volume-up | volume-down | volume-mute | brightness-up | brightness-down]";
 
 fn main() -> ExitCode {
@@ -132,6 +135,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 fn parse_command(command: &str) -> Option<Message> {
     Some(match command {
         "launcher" => Message::Toggle(Panel::Launcher),
+        "clipboard" => Message::Toggle(Panel::Clipboard),
         "dashboard" => Message::Toggle(Panel::Dashboard),
         "wallpaper" => Message::Toggle(Panel::Wallpaper),
         "session" => Message::Toggle(Panel::Session),
@@ -148,6 +152,7 @@ fn parse_command(command: &str) -> Option<Message> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Panel {
     Launcher,
+    Clipboard,
     Dashboard,
     Wallpaper,
     Session,
@@ -157,6 +162,7 @@ impl Panel {
     fn title(self) -> &'static str {
         match self {
             Self::Launcher => "Applications",
+            Self::Clipboard => "Clipboard",
             Self::Dashboard => "Dashboard",
             Self::Wallpaper => "Wallpaper",
             Self::Session => "Session",
@@ -166,6 +172,7 @@ impl Panel {
     fn placement(self) -> (u32, u32, Anchor) {
         match self {
             Self::Launcher => (520, 470, Anchor::Top | Anchor::Left),
+            Self::Clipboard => (520, 500, Anchor::Top | Anchor::Left),
             Self::Dashboard => (420, 520, Anchor::Top | Anchor::Right),
             Self::Wallpaper => (550, 480, Anchor::Top | Anchor::Right),
             Self::Session => (310, 330, Anchor::Top | Anchor::Right),
@@ -240,6 +247,7 @@ enum Message {
     WorkspacesDirty,
     WorkspacesRead(Vec<Workspace>),
     VolumeDirty,
+    VolumeRetry,
     VolumeRead(Instant, Option<Level>),
     Network(telemetry::Network),
     PowerRead(Option<telemetry::PowerProfiles>),
@@ -249,6 +257,14 @@ enum Message {
     OpenNetwork,
     PowerChanged(Result<telemetry::PowerProfiles, String>),
     AppsLoaded(Id, Vec<App>),
+    ClipboardLoaded(Id, Result<Vec<clipboard::Entry>, String>),
+    ClipboardThumbnail(Id, u64, Option<image::Handle>),
+    ClipboardSearch(String),
+    ClipboardRestore(u64),
+    ClipboardClear,
+    ClipboardConfirmClear,
+    ClipboardCancelClear,
+    ClipboardCleared(Result<String, String>),
     Thumbnail(Id, usize, Option<image::Handle>),
     Opened(Id),
     Closed(Id),
@@ -304,6 +320,14 @@ struct Frost {
     loading_apps: bool,
     query: String,
     selected: usize,
+    clipboard_entries: Vec<clipboard::Entry>,
+    clipboard_query: String,
+    clipboard_selected: usize,
+    clipboard_loading: bool,
+    clipboard_error: Option<String>,
+    clipboard_confirm_clear: bool,
+    clipboard_thumbnails: HashMap<u64, image::Handle>,
+    clipboard_thumbnail_job: Option<iced::task::Handle>,
     wallpaper_files: Vec<PathBuf>,
     wallpaper_target: Option<WallpaperChoice>,
     wallpaper_busy: bool,
@@ -335,6 +359,7 @@ struct Frost {
     workspaces_again: bool,
     volume_pending: bool,
     volume_again: bool,
+    volume_retry_pending: bool,
     clock: chrono::DateTime<chrono::Local>,
 }
 
@@ -361,6 +386,14 @@ impl Frost {
             loading_apps: false,
             query: String::new(),
             selected: 0,
+            clipboard_entries: Vec::new(),
+            clipboard_query: String::new(),
+            clipboard_selected: 0,
+            clipboard_loading: false,
+            clipboard_error: None,
+            clipboard_confirm_clear: false,
+            clipboard_thumbnails: HashMap::new(),
+            clipboard_thumbnail_job: None,
             wallpaper_files: Vec::new(),
             wallpaper_target: None,
             wallpaper_busy: false,
@@ -391,6 +424,7 @@ impl Frost {
             workspaces_again: false,
             volume_pending: false,
             volume_again: false,
+            volume_retry_pending: false,
             clock: chrono::Local::now(),
         };
         frost.refresh_files();
@@ -518,6 +552,37 @@ impl Frost {
             .filter(move |app| terms.iter().all(|term| app.search.contains(term)))
     }
 
+    fn clipboard_matches(&self) -> impl Iterator<Item = &clipboard::Entry> {
+        let query = self.clipboard_query.trim().to_lowercase();
+        self.clipboard_entries.iter().filter(move |entry| {
+            query.is_empty()
+                || entry.preview.to_lowercase().contains(&query)
+                || entry.mime.to_lowercase().contains(&query)
+        })
+    }
+
+    fn load_clipboard_thumbnails(&mut self) -> Task<Message> {
+        let Some((Panel::Clipboard, panel)) = self.panel else {
+            return Task::none();
+        };
+        self.clipboard_thumbnail_job = None;
+        let ids: Vec<_> = self
+            .clipboard_matches()
+            .take(80)
+            .filter(|entry| entry.is_image() && !self.clipboard_thumbnails.contains_key(&entry.id))
+            .take(30)
+            .map(|entry| entry.id)
+            .collect();
+        let previews =
+            stream::iter(ids).then(|id| async move { (id, clipboard::thumbnail(id).await) });
+        let (task, handle) = Task::run(previews, move |(id, thumb)| {
+            Message::ClipboardThumbnail(panel, id, thumb)
+        })
+        .abortable();
+        self.clipboard_thumbnail_job = Some(handle.abort_on_drop());
+        task
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Tick => {
@@ -555,17 +620,27 @@ impl Frost {
                 }
             }
             Message::VolumeDirty => self.refresh_volume(),
+            Message::VolumeRetry => {
+                if !std::mem::take(&mut self.volume_retry_pending) {
+                    return Task::none();
+                }
+                self.refresh_volume()
+            }
             Message::VolumeRead(started, volume) => {
                 self.volume_pending = false;
                 let failed = volume.is_none();
+                if !failed {
+                    self.volume_retry_pending = false;
+                }
                 let notice = self.level_read(true, Some(started), volume);
                 let again = if std::mem::take(&mut self.volume_again) {
                     self.refresh_volume()
-                } else if failed {
+                } else if failed && !self.volume_retry_pending {
                     // No event announces that audio became available.
-                    // The timer must be created inside the runtime, not in update().
+                    // Only one timer may be pending while polling also fails.
+                    self.volume_retry_pending = true;
                     Task::perform(async { tokio::time::sleep(VOLUME_RETRY).await }, |()| {
-                        Message::VolumeDirty
+                        Message::VolumeRetry
                     })
                 } else {
                     Task::none()
@@ -622,6 +697,27 @@ impl Frost {
                 self.selected = self.selected.min(self.matches().count().saturating_sub(1));
                 Task::none()
             }
+            Message::ClipboardLoaded(id, result) if self.panel == Some((Panel::Clipboard, id)) => {
+                self.clipboard_loading = false;
+                match result {
+                    Ok(entries) => {
+                        self.clipboard_entries = entries;
+                        self.clipboard_error = None;
+                        self.clipboard_selected = 0;
+                        self.load_clipboard_thumbnails()
+                    }
+                    Err(err) => {
+                        self.clipboard_error = Some(err);
+                        Task::none()
+                    }
+                }
+            }
+            Message::ClipboardThumbnail(id, entry, Some(thumb))
+                if self.panel == Some((Panel::Clipboard, id)) =>
+            {
+                self.clipboard_thumbnails.insert(entry, thumb);
+                Task::none()
+            }
             Message::Thumbnail(id, index, preview)
                 if self.panel == Some((Panel::Wallpaper, id)) =>
             {
@@ -633,11 +729,15 @@ impl Frost {
             Message::Opened(id) if self.panel == Some((Panel::Launcher, id)) => {
                 operation::focus(LAUNCHER_INPUT)
             }
+            Message::Opened(id) if self.panel == Some((Panel::Clipboard, id)) => {
+                operation::focus(CLIPBOARD_INPUT)
+            }
             Message::Closed(id) => {
                 self.outputs.remove(&id);
                 self.backdrops.retain(|_, current| *current != id);
                 if self.panel.is_some_and(|(_, active)| active == id) {
                     self.thumbnail_job = None;
+                    self.clipboard_thumbnail_job = None;
                     self.panel = None;
                 }
                 if self
@@ -660,6 +760,15 @@ impl Frost {
                     };
                     self.reveal_selection(count)
                 }
+                Some((Panel::Clipboard, active)) if active == id => {
+                    let count = self.clipboard_matches().count().min(80);
+                    self.clipboard_selected = if key == Named::ArrowUp {
+                        self.clipboard_selected.saturating_sub(1)
+                    } else {
+                        (self.clipboard_selected + 1).min(count.saturating_sub(1))
+                    };
+                    self.reveal_clipboard_selection(count)
+                }
                 _ => Task::none(),
             },
             Message::Toggle(panel) => self.toggle(panel),
@@ -669,6 +778,48 @@ impl Frost {
                 self.selected = 0;
                 self.reveal_selection(0)
             }
+            Message::ClipboardSearch(query) => {
+                self.clipboard_query = query;
+                self.clipboard_selected = 0;
+                Task::batch([
+                    self.reveal_clipboard_selection(0),
+                    self.load_clipboard_thumbnails(),
+                ])
+            }
+            Message::ClipboardRestore(id) => {
+                let Some(entry) = self
+                    .clipboard_entries
+                    .iter()
+                    .find(|entry| entry.id == id)
+                    .cloned()
+                else {
+                    return Task::none();
+                };
+                Task::perform(clipboard::restore(entry), |result| {
+                    Message::Finished(result, Some(""))
+                })
+            }
+            Message::ClipboardClear => {
+                self.clipboard_confirm_clear = true;
+                Task::none()
+            }
+            Message::ClipboardCancelClear => {
+                self.clipboard_confirm_clear = false;
+                Task::none()
+            }
+            Message::ClipboardConfirmClear if self.clipboard_confirm_clear => {
+                self.clipboard_confirm_clear = false;
+                Task::perform(clipboard::wipe(), Message::ClipboardCleared)
+            }
+            Message::ClipboardCleared(result) => match result {
+                Ok(_) => {
+                    self.clipboard_entries.clear();
+                    self.clipboard_thumbnails.clear();
+                    self.clipboard_selected = 0;
+                    Task::none()
+                }
+                Err(err) => self.error(err),
+            },
             Message::Launch(path) => Task::perform(
                 services::launch(path, self.config.terminal.clone()),
                 |result| Message::Finished(result, Some("")),
@@ -1000,6 +1151,21 @@ impl Frost {
         operation::snap_to("frost-app-list", operation::RelativeOffset { x: 0.0, y })
     }
 
+    fn reveal_clipboard_selection(&self, count: usize) -> Task<Message> {
+        const VIEWPORT_ROWS: usize = 6;
+        let extra = count.saturating_sub(VIEWPORT_ROWS);
+        let target = self.clipboard_selected.saturating_sub(VIEWPORT_ROWS / 2);
+        let y = if extra == 0 {
+            0.0
+        } else {
+            (target as f32 / extra as f32).min(1.0)
+        };
+        operation::snap_to(
+            "frost-clipboard-list",
+            operation::RelativeOffset { x: 0.0, y },
+        )
+    }
+
     fn next_control(&mut self) -> Task<Message> {
         if self.adjusting {
             return Task::none();
@@ -1096,6 +1262,18 @@ impl Frost {
                     move |apps| Message::AppsLoaded(id, apps),
                 )
             }
+            Panel::Clipboard => {
+                self.clipboard_loading = true;
+                self.clipboard_error = None;
+                self.clipboard_query.clear();
+                self.clipboard_selected = 0;
+                self.clipboard_confirm_clear = false;
+                self.clipboard_entries.clear();
+                self.clipboard_thumbnails.clear();
+                Task::perform(clipboard::list(), move |entries| {
+                    Message::ClipboardLoaded(id, entries)
+                })
+            }
             Panel::Wallpaper => {
                 self.wallpaper_files = services::wallpapers();
                 self.thumbnails = vec![None; self.wallpaper_files.len()];
@@ -1144,6 +1322,10 @@ impl Frost {
         self.confirm = None;
         self.thumbnail_job = None;
         self.thumbnails.clear();
+        self.clipboard_thumbnail_job = None;
+        self.clipboard_thumbnails.clear();
+        self.clipboard_entries.clear();
+        self.clipboard_confirm_clear = false;
         self.panel
             .take()
             .map_or_else(Task::none, |(_, id)| window::close(id))
@@ -1411,7 +1593,13 @@ mod volume_startup_tests {
         let (mut frost, _) = Frost::new(shell::channel().1, config::Config::default());
         let _ = frost.update(Message::VolumeDirty);
         let retry = messages(frost.update(Message::VolumeRead(Instant::now(), None)));
-        assert!(matches!(retry.as_slice(), [Message::VolumeDirty]));
+        assert!(matches!(retry.as_slice(), [Message::VolumeRetry]));
+
+        // A failing event source may poll every second. Those reads must
+        // share the pending retry instead of adding more timers.
+        let _ = frost.update(Message::VolumeDirty);
+        assert!(messages(frost.update(Message::VolumeRead(Instant::now(), None))).is_empty());
+        assert!(frost.volume_retry_pending);
 
         let _ = frost.update(Message::VolumeDirty);
         let level = Some(Level {
@@ -1421,5 +1609,7 @@ mod volume_startup_tests {
         let done = messages(frost.update(Message::VolumeRead(Instant::now(), level)));
         assert!(done.is_empty());
         assert_eq!(frost.snapshot.volume, level);
+        assert!(!frost.volume_retry_pending);
+        assert!(messages(frost.update(Message::VolumeRetry)).is_empty());
     }
 }

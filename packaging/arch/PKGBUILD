@@ -13,6 +13,9 @@ makedepends=('cargo>=1.95' 'pkgconf')
 backup=('etc/pam.d/frost-locker')
 optdepends=(
   'wireplumber: volume controls'
+  'cliphist: clipboard history'
+  'wl-clipboard: clipboard capture and restoration'
+  'xdg-utils: MIME inference for older clipboard history entries'
   'libpulse: react to volume changes with pactl instead of polling'
   'brightnessctl: brightness controls'
   'networkmanager: Wi-Fi status and nmtui'
