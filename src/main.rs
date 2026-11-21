@@ -40,6 +40,14 @@ use std::{
 
 const LAUNCHER_INPUT: &str = "frost-search";
 
+/// Delay before re-reading a volume that could not be read, e.g. while
+/// WirePlumber is still starting with the session and no event will follow.
+const VOLUME_RETRY: Duration = if cfg!(test) {
+    Duration::from_millis(20)
+} else {
+    Duration::from_secs(3)
+};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WallpaperChoice {
     Image(PathBuf),
@@ -549,9 +557,16 @@ impl Frost {
             Message::VolumeDirty => self.refresh_volume(),
             Message::VolumeRead(started, volume) => {
                 self.volume_pending = false;
+                let failed = volume.is_none();
                 let notice = self.level_read(true, Some(started), volume);
                 let again = if std::mem::take(&mut self.volume_again) {
                     self.refresh_volume()
+                } else if failed {
+                    // No event announces that audio became available.
+                    // The timer must be created inside the runtime, not in update().
+                    Task::perform(async { tokio::time::sleep(VOLUME_RETRY).await }, |()| {
+                        Message::VolumeDirty
+                    })
                 } else {
                     Task::none()
                 };
@@ -1112,7 +1127,7 @@ impl Frost {
             false,
         );
         let poll = if panel == Panel::Dashboard {
-            Task::batch([self.poll(), self.poll_weather()])
+            Task::batch([self.poll(), self.poll_weather(), self.refresh_volume()])
         } else {
             Task::none()
         };
@@ -1365,5 +1380,46 @@ mod brightness_slider_tests {
         let _ = frost.update(Message::SetBrightness(60));
         let _ = frost.update(Message::LevelSet(false, 40, Ok(level(40))));
         assert_eq!(frost.snapshot.brightness, level(60));
+    }
+}
+
+#[cfg(test)]
+mod volume_startup_tests {
+    use super::*;
+    use iced::futures::StreamExt;
+
+    /// Runs a task to completion and returns the messages it produces.
+    fn messages(task: Task<Message>) -> Vec<Message> {
+        let Some(stream) = iced_runtime::task::into_stream(task) else {
+            return Vec::new();
+        };
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(stream.collect::<Vec<_>>())
+            .into_iter()
+            .filter_map(|action| match action {
+                iced_runtime::Action::Output(message) => Some(message),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_volume_read_is_retried() {
+        let (mut frost, _) = Frost::new(shell::channel().1, config::Config::default());
+        let _ = frost.update(Message::VolumeDirty);
+        let retry = messages(frost.update(Message::VolumeRead(Instant::now(), None)));
+        assert!(matches!(retry.as_slice(), [Message::VolumeDirty]));
+
+        let _ = frost.update(Message::VolumeDirty);
+        let level = Some(Level {
+            percent: 40,
+            muted: false,
+        });
+        let done = messages(frost.update(Message::VolumeRead(Instant::now(), level)));
+        assert!(done.is_empty());
+        assert_eq!(frost.snapshot.volume, level);
     }
 }
