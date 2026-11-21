@@ -1,10 +1,10 @@
 use iced::futures::{SinkExt, Stream, channel::mpsc};
 use std::{
-    collections::hash_map::DefaultHasher,
+    ffi::OsStr,
     fs::{self, File, OpenOptions},
     hash::{Hash, Hasher},
     io::{self, ErrorKind},
-    os::unix::net::UnixDatagram,
+    os::unix::{ffi::OsStrExt, net::UnixDatagram},
     path::PathBuf,
     sync::Arc,
 };
@@ -28,9 +28,27 @@ pub(crate) fn path() -> io::Result<PathBuf> {
         .filter(|path| path.is_absolute())
         .ok_or_else(|| io::Error::other("XDG_RUNTIME_DIR must be an absolute path"))?;
     let display = std::env::var_os("WAYLAND_DISPLAY").unwrap_or_else(|| "wayland-0".into());
-    let mut hash = DefaultHasher::new();
-    display.hash(&mut hash);
-    Ok(runtime.join(format!("frost-{:016x}.sock", hash.finish())))
+    Ok(runtime.join(format!("frost-{}.sock", display_key(&display))))
+}
+
+/// A file-name-safe key for a Wayland display that is identical across
+/// builds, so a client and a daemon compiled separately agree on the path.
+fn display_key(display: &OsStr) -> String {
+    let bytes = display.as_bytes();
+    let readable = !bytes.is_empty()
+        && bytes.len() <= 48
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && bytes[0] != b'.';
+    if readable {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    // FNV-1a: a fixed algorithm, unlike std's DefaultHasher.
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("{hash:016x}")
 }
 
 impl Socket {
@@ -98,4 +116,19 @@ impl Socket {
 pub fn send(command: &str) -> io::Result<()> {
     UnixDatagram::unbound()?.send_to(command.as_bytes(), path()?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_keys_are_stable_and_file_name_safe() {
+        assert_eq!(display_key(OsStr::new("wayland-1")), "wayland-1");
+        assert_eq!(
+            display_key(OsStr::new("/run/user/1000/wayland-1")),
+            "2a61ea9b16ca481e"
+        );
+        assert_eq!(display_key(OsStr::new("..")).len(), 16);
+    }
 }
