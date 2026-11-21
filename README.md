@@ -15,7 +15,7 @@ Frost is a Wayland shell in Rust inspired by [quickshell-d77](https://github.com
 
 ## Build and run
 
-Use a Wayland session with `zwlr_layer_shell_v1`. Building requires recent Rust and Cargo (validated with Rust 1.100.0), a C compiler, `pkg-config`, and development files for xkbcommon and Linux PAM.
+Use a Wayland session with `zwlr_layer_shell_v1`. Building requires Rust and Cargo 1.95 or newer, a C compiler, `pkg-config`, and development files for xkbcommon and Linux PAM.
 
 On Void Linux, install the build dependencies and `gio` for the launcher:
 
