@@ -244,10 +244,24 @@ impl Frost {
             .spacing(if compact { 6 } else { 10 })
             .align_y(Alignment::Center);
         if show("cpu") {
-            status = status.push(cpu);
+            status = status.push(hint(
+                p.button(cpu, false)
+                    .padding([4, 5])
+                    .on_press(Message::Monitor("cpu")),
+                "Open system monitor · CPU",
+                p,
+                iced::widget::tooltip::Position::Bottom,
+            ));
         }
         if show("memory") {
-            status = status.push(ram);
+            status = status.push(hint(
+                p.button(ram, false)
+                    .padding([4, 5])
+                    .on_press(Message::Monitor("memory")),
+                "Open system monitor · memory",
+                p,
+                iced::widget::tooltip::Position::Bottom,
+            ));
         }
         if show("network") {
             status = status.push(network);

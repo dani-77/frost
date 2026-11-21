@@ -36,6 +36,8 @@
 - The launcher honors `Terminal=true` desktop entries. It and the `nmtui` button resolve a terminal in the same order: Frost config, `TERMINAL`, `xdg-terminal-exec`, then installed terminals.
 - A `/` query switches the launcher to local file search. The background index is bounded to five directory levels and 20,000 non-hidden files, and file opening uses `xdg-open`.
 - Clicking CPU, memory, or network in the dashboard opens an in-place detail overlay. Process and interface commands run only when requested.
+- CPU and memory in the bar call the same portable `d77-monitor` script. It toggles a centered Eww surface and selects the clicked metric; the dashboard details remain independent.
+- The Eww configuration uses dgop's JSON CLI for CPU, memory, and sorted processes, with no HTTP server. It reads the shared Matugen palette every 10 seconds. The script and configuration can be copied together to other shells; each shell only supplies its own click binding.
 - `~/.config/frost/config.toml` can set bar height and margin, visible bar modules, terminal executable, and weather location. Defaults preserve the original layout, and the configured terminal takes priority over `TERMINAL`.
 
 ## Clipboard

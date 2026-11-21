@@ -17,6 +17,7 @@ endif
 
 BINDIR := $(DESTDIR)$(PREFIX)/bin
 SHAREDIR := $(DESTDIR)$(PREFIX)/share/frost
+MONITORDIR := $(DESTDIR)$(PREFIX)/share/d77-monitor
 LICENSEDIR := $(DESTDIR)$(PREFIX)/share/licenses/frost
 PAMDIR := $(DESTDIR)/etc/pam.d
 PAM_SOURCE := pam.d/frost-locker.$(PAM_VARIANT)
@@ -40,12 +41,16 @@ install: build
 	install -Dm755 target/release/frost "$(BINDIR)/frost"
 	install -Dm644 "$(PAM_SOURCE)" "$(PAMDIR)/frost-locker"
 	install -Dm644 config.example.toml "$(SHAREDIR)/config.example.toml"
+	install -Dm755 monitor/d77-monitor "$(BINDIR)/d77-monitor"
+	install -Dm644 monitor/eww.yuck "$(MONITORDIR)/eww.yuck"
+	install -Dm644 monitor/eww.scss "$(MONITORDIR)/eww.scss"
 	install -Dm644 LICENSE "$(LICENSEDIR)/LICENSE"
 	install -m644 $(LICENSE_FILES) "$(LICENSEDIR)/"
 
 uninstall:
-	rm -f "$(BINDIR)/frost" "$(PAMDIR)/frost-locker" \
+	rm -f "$(BINDIR)/frost" "$(BINDIR)/d77-monitor" "$(PAMDIR)/frost-locker" \
 		"$(SHAREDIR)/config.example.toml" "$(LICENSEDIR)/LICENSE" \
+		"$(MONITORDIR)/eww.yuck" "$(MONITORDIR)/eww.scss" \
 		$(LICENSE_TARGETS)
 
 clean:

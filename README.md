@@ -6,7 +6,7 @@ Frost is a Wayland shell in Rust inspired by [quickshell-d77](https://github.com
 
 | Component | Current development branch |
 | --- | --- |
-| Bar | A floating bar per output with CPU, RAM, network, power profile, battery, clock, and workspaces. Click the battery to switch between percentage and estimated time; systems without a built-in battery omit it. Sway, Hyprland, and niri use their IPC; other compositors can use `ext-workspace-v1`. |
+| Bar | A floating bar per output with CPU, RAM, network, power profile, battery, clock, and workspaces. Click CPU or RAM to toggle the centered Eww system monitor; click the battery to switch between percentage and estimated time. Systems without a built-in battery omit it. Sway, Hyprland, and niri use their IPC; other compositors can use `ext-workspace-v1`. |
 | Launcher | Searches XDG `.desktop` entries with application icons. Prefix the query with `/` to search local files and open them with their default application. Arrow keys select, Enter launches, and Esc closes. `Terminal=true` uses the configured terminal. |
 | Clipboard | Searches cliphist history, previews images, restores an item to the clipboard, and clears the history after confirmation. Opens with `frost clipboard`; no bar module is needed. |
 | Dashboard | CPU, memory, network, battery, weather, volume and brightness sliders, cmus controls, and session actions in a single view without scrolling. Click a metric for details. |
@@ -30,6 +30,8 @@ On Arch Linux, install the matching build tools and clipboard tools before build
 ```sh
 sudo pacman -S --needed base-devel rust cargo pkgconf libxkbcommon pam glib2 cliphist wl-clipboard xdg-utils
 ```
+
+The bar's system monitor also needs `eww` and `dgop`. On Void with the d77 repository enabled, install them with `sudo xbps-install -S eww dgop`; on Arch, use `sudo pacman -S eww dgop` where both packages are available. The monitor calls dgop's JSON CLI when open and does not start its HTTP server.
 
 For notifications, install and run **one** daemon: `dunst` or `swaync` (SwayNotificationCenter). Frost uses the daemon already running in your Wayland session. On Void, `sudo xbps-install -S dunst` installs Dunst; SwayNotificationCenter needs a repository that provides `swaync`. On Arch, install either with `sudo pacman -S dunst` or `sudo pacman -S swaync`. Do not start both notification daemons in the same session.
 
@@ -55,7 +57,7 @@ make
 sudo make install
 ```
 
-This installs `/usr/bin/frost`, a PAM policy at `/etc/pam.d/frost-locker`, the example configuration at `/usr/share/frost/config.example.toml`, and the licenses under `/usr/share/licenses/frost`. The Makefile detects Void, Arch, Debian derivatives, and Chimera (including hybrid-d77 through `ID_LIKE`) from `/etc/os-release`. Override the choice when staging for another system, for example `make install DESTDIR=/tmp/frost-package PAM_VARIANT=chimera`. The Chimera policy follows hybrid-d77's local `pam_unix.so` authentication and adds the account rule required by Frost. `PREFIX` defaults to `/usr`; `DESTDIR` stages an install for packaging. Run `sudo make uninstall` to remove the installed files. If `~/.cargo/bin` precedes `/usr/bin` in `PATH`, `frost` still resolves to the user-installed copy; check with `command -v frost`.
+This installs `/usr/bin/frost`, `/usr/bin/d77-monitor`, the shared Eww configuration at `/usr/share/d77-monitor`, a PAM policy at `/etc/pam.d/frost-locker`, the example configuration at `/usr/share/frost/config.example.toml`, and the licenses under `/usr/share/licenses/frost`. The Makefile detects Void, Arch, Debian derivatives, and Chimera (including hybrid-d77 through `ID_LIKE`) from `/etc/os-release`. Override the choice when staging for another system, for example `make install DESTDIR=/tmp/frost-package PAM_VARIANT=chimera`. The Chimera policy follows hybrid-d77's local `pam_unix.so` authentication and adds the account rule required by Frost. `PREFIX` defaults to `/usr`; `DESTDIR` stages an install for packaging. Run `sudo make uninstall` to remove the installed files. If `~/.cargo/bin` precedes `/usr/bin` in `PATH`, `frost` still resolves to the user-installed copy; check with `command -v frost`.
 
 Versioned packaging recipes are in [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD) and [`packaging/void/template`](packaging/void/template). Both use the `v0.1.0` source tag and install the distribution-specific PAM policy.
 
@@ -64,6 +66,7 @@ Versioned packaging recipes are in [`packaging/arch/PKGBUILD`](packaging/arch/PK
 | Launcher | `gio` for applications; `xdg-open` from `xdg-utils` for `/` file search |
 | Notifications | One running daemon: `dunst` (`dunstctl`) or `swaync` (`swaync-client`) |
 | Metric details | `ps` for the CPU process list and `ip` from `iproute2` for network interfaces; memory comes from `/proc/meminfo` |
+| Bar system monitor | `eww` for the centered surface and `dgop` for JSON CPU, memory, and process data |
 | Clipboard | `cliphist` for history, `wl-clipboard` for capture and restoration, and `xdg-utils` for MIME inference with older cliphist versions |
 | Wi-Fi | `nmcli` or `iwgetid` for the SSID; route and state come from Linux |
 | Power profile | `powerprofilesctl` and a compatible Power Profiles API |
@@ -111,6 +114,8 @@ If your session already runs cliphist watchers, keep its existing setup. Frost o
 In the launcher, type `/` followed by part of a file name or path to search local, non-hidden files. Frost scans the home directory when the launcher opens, up to five directory levels and 20,000 files, and never follows directory symlinks. Click a result or press Enter to open it in its default application.
 
 Click the bar clock for notifications. Dunst users get a Frost history panel with recall, clear, and do not disturb controls; SwayNotificationCenter users get its control center. Clearing Dunst history requires confirmation. Frost does not start or replace the notification daemon.
+
+Click CPU or RAM in the bar to open the same centered system monitor, initially sorted by the clicked metric. Click the same metric again to close it; clicking the other metric switches the view. The monitor reads `${XDG_CACHE_HOME:-$HOME/.cache}/d77/palette.json`, which Matugen updates for the selected wallpaper. The existing dashboard metric details remain separate. The portable [monitor directory](monitor/) contains only the `d77-monitor` script and Eww configuration; another shell can copy it unchanged and invoke `d77-monitor cpu` or `d77-monitor memory` from its bar. If you installed only the Frost binary with Cargo, keep the source checkout so Frost can find `monitor/d77-monitor`, or copy the whole directory to `${XDG_CONFIG_HOME:-$HOME/.config}/d77-monitor`.
 
 ## Locker
 

@@ -291,6 +291,7 @@ enum Message {
     NotificationActionDone(Result<String, String>),
     Metric(telemetry::Metric),
     MetricLoaded(telemetry::Metric, Vec<String>),
+    Monitor(&'static str),
     Switch(Workspace),
     NativeWorkspaces(Option<Arc<WorkspaceSnapshot>>),
     NativeActivate(WorkspaceId),
@@ -958,6 +959,9 @@ impl Frost {
                 self.metric_lines = lines;
                 Task::none()
             }
+            Message::Monitor(mode) => Task::perform(services::open_monitor(mode), |result| {
+                Message::Finished(result, Some(""))
+            }),
             Message::Switch(workspace) => {
                 Task::perform(services::switch(self.compositor, workspace), |result| {
                     Message::Finished(result, None)

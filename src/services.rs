@@ -235,6 +235,24 @@ pub async fn command(program: &str, args: &[&str]) -> Result<String, String> {
     command_with_timeout(program, args, Duration::from_secs(3)).await
 }
 
+pub async fn open_monitor(mode: &str) -> Result<String, String> {
+    let config_home = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
+    let user_script = config_home.map(|dir| dir.join("d77-monitor/d77-monitor"));
+    let source_script = Path::new(env!("CARGO_MANIFEST_DIR")).join("monitor/d77-monitor");
+    let program = user_script
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            Path::new("/usr/bin/d77-monitor")
+                .is_file()
+                .then(|| PathBuf::from("/usr/bin/d77-monitor"))
+        })
+        .or_else(|| source_script.is_file().then_some(source_script))
+        .unwrap_or_else(|| PathBuf::from("d77-monitor"));
+    command_with_timeout(&program.to_string_lossy(), &[mode], Duration::from_secs(8)).await
+}
+
 async fn command_with_timeout(
     program: &str,
     args: &[&str],
