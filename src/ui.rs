@@ -185,13 +185,15 @@ impl Palette {
         button(text(label).size(12))
             .padding([5, 8])
             .style(move |_, status| {
+                let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
                 let background = if active {
                     self.ice
                 } else if urgent {
                     self.danger
-                } else if occupied {
-                    self.elevated
-                } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                } else if occupied && hovered {
+                    // Occupied workspaces are already elevated; hover goes one step further.
+                    self.line
+                } else if occupied || hovered {
                     self.elevated
                 } else {
                     Color::TRANSPARENT

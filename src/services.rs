@@ -152,24 +152,23 @@ pub async fn workspaces(compositor: Compositor) -> Vec<Workspace> {
             ws.focused = focused.as_ref().is_some_and(|active| active.id == ws.id);
         }
     }
-    if compositor == Compositor::Niri {
-        if let Ok(out) = command("niri", &["msg", "--json", "windows"]).await
-            && let Ok(windows) = serde_json::from_str::<Vec<serde_json::Value>>(&out)
-        {
-            for ws in &mut list {
-                ws.windows = Some(
-                    windows
-                        .iter()
-                        .filter(|window| {
-                            window.get("workspace_id").and_then(|id| id.as_i64()) == Some(ws.id)
-                        })
-                        .count() as u32,
-                );
-                ws.urgent = windows.iter().any(|window| {
-                    window.get("workspace_id").and_then(|id| id.as_i64()) == Some(ws.id)
-                        && window.get("is_urgent").and_then(|value| value.as_bool()) == Some(true)
-                });
-            }
+    if compositor == Compositor::Niri
+        && let Ok(out) = command("niri", &["msg", "--json", "windows"]).await
+        && let Ok(windows) = serde_json::from_str::<Vec<serde_json::Value>>(&out)
+    {
+        for ws in &mut list {
+            ws.windows = Some(
+                windows
+                    .iter()
+                    .filter(|window| {
+                        window.get("workspace_id").and_then(|id| id.as_i64()) == Some(ws.id)
+                    })
+                    .count() as u32,
+            );
+            ws.urgent = windows.iter().any(|window| {
+                window.get("workspace_id").and_then(|id| id.as_i64()) == Some(ws.id)
+                    && window.get("is_urgent").and_then(|value| value.as_bool()) == Some(true)
+            });
         }
     }
     list.retain(|ws| ws.id >= 0 || (compositor == Compositor::Sway && ws.name.is_some()));
