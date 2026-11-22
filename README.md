@@ -31,7 +31,7 @@ On Arch Linux, install the matching build tools and clipboard tools before build
 sudo pacman -S --needed base-devel rust cargo pkgconf libxkbcommon pam glib2 cliphist wl-clipboard xdg-utils
 ```
 
-The bar's system monitor also needs `eww` and `dgop`. On Void with the d77 repository enabled, install them with `sudo xbps-install -S eww dgop`. On Arch, install `dgop` with `sudo pacman -S dgop` and `eww` from the AUR. The `frost-d77` AUR package declares both dependencies. The monitor calls dgop's JSON CLI when open and does not start its HTTP server.
+The bar's system monitor also needs `eww` and `dgop`. On Void with the d77 repository enabled, install them with `sudo xbps-install -S eww dgop`. On Arch, install `dgop` with `sudo pacman -S dgop` and `eww` from the AUR. The `frost-d77` AUR package declares both dependencies. The monitor calls dgop's JSON CLI when open and does not start its HTTP server. Where there is no `dgop` (Chimera Linux, for one), it reads the same data from `atop` instead.
 
 For notifications, install and run **one** daemon: `dunst` or `swaync` (SwayNotificationCenter). Frost uses the daemon already running in your Wayland session. On Void, `sudo xbps-install -S dunst` installs Dunst; SwayNotificationCenter needs a repository that provides `swaync`. On Arch, install either with `sudo pacman -S dunst` or `sudo pacman -S swaync`. Do not start both notification daemons in the same session.
 
@@ -66,7 +66,7 @@ Versioned packaging recipes are in [`packaging/arch/PKGBUILD`](packaging/arch/PK
 | Launcher | `gio` for applications; `xdg-open` from `xdg-utils` for `/` file search |
 | Notifications | One running daemon: `dunst` (`dunstctl`) or `swaync` (`swaync-client`) |
 | Metric details | `ps` for the CPU process list and `ip` from `iproute2` for network interfaces; memory comes from `/proc/meminfo` |
-| Bar system monitor | `eww` for the centered surface and `dgop` for JSON CPU, memory, and process data |
+| Bar system monitor | `eww` for the centered surface and `dgop` (or `atop` as a fallback) for CPU, memory, and process data |
 | Clipboard | `cliphist` for history, `wl-clipboard` for capture and restoration, and `xdg-utils` for MIME inference with older cliphist versions |
 | Wi-Fi | `nmcli` or `iwgetid` for the SSID; route and state come from Linux |
 | Power profile | `powerprofilesctl` and a compatible Power Profiles API |
