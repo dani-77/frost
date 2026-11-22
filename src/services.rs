@@ -113,7 +113,7 @@ pub struct Workspace {
     pub num: Option<i64>,
     pub name: Option<String>,
     pub idx: Option<u32>,
-    #[serde(default, alias = "is_focused", alias = "is_active")]
+    #[serde(default, alias = "is_active")]
     pub focused: bool,
     #[serde(default)]
     pub urgent: bool,
@@ -130,6 +130,20 @@ impl Workspace {
             Compositor::Hyprland | Compositor::Niri => self.windows.is_none_or(|count| count > 0),
             Compositor::Other => true,
         }
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::Workspace;
+
+    #[test]
+    fn niri_workspace_accepts_active_and_focused_flags() {
+        let data = r#"[{"id":1,"idx":1,"name":null,"is_active":true,"is_focused":true},{"id":2,"idx":2,"name":null,"is_active":false,"is_focused":false}]"#;
+        let workspaces: Vec<Workspace> = serde_json::from_str(data).unwrap();
+        assert_eq!(workspaces.len(), 2);
+        assert!(workspaces[0].focused);
+        assert!(!workspaces[1].focused);
     }
 }
 
@@ -801,7 +815,16 @@ pub async fn session(action: Session, compositor: Compositor) -> Result<String, 
         (Session::Reboot, _) => power("org.freedesktop.login1.Manager.Reboot").await,
         (Session::PowerOff, _) => power("org.freedesktop.login1.Manager.PowerOff").await,
         (Session::Logout, Compositor::Sway) => command("swaymsg", &["exit"]).await,
-        (Session::Logout, Compositor::Hyprland) => command("hyprctl", &["dispatch", "exit"]).await,
+        (Session::Logout, Compositor::Hyprland) => {
+            // Lua configurations use expression dispatchers; older configs
+            // still accept the classic textual dispatcher.
+            match command("hyprctl", &["dispatch", "hl.dsp.exit()"]).await {
+                Ok(result) => Ok(result),
+                Err(lua_error) => command("hyprctl", &["dispatch", "exit"])
+                    .await
+                    .map_err(|classic_error| format!("{lua_error}; {classic_error}")),
+            }
+        }
         (Session::Logout, Compositor::Niri) => {
             command("niri", &["msg", "action", "quit", "--skip-confirmation"]).await
         }

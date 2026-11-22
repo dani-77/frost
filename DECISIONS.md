@@ -20,6 +20,8 @@
 - Spitfire, Wasp, and Whiplash announce `Active` and `Urgent` through `ext-workspace-v1`. Occupancy comes from `$XDG_RUNTIME_DIR/d77-workspaces-$WAYLAND_DISPLAY`, keyed by protocol ID. Without the counts file, workspaces are not marked empty.
 - The bar accepts a sole `ext-workspace-v1` group with no output assignment. Spitfire exposes one such group; output-scoped groups remain preferred for Wasp and Whiplash.
 - Sway uses `representation` for occupancy and `urgent` for urgency. Hyprland uses `windows`; niri associates each window with its workspace ID.
+- Niri sends both `is_active` and `is_focused` for each workspace. The bar maps `is_active` to the highlighted state and ignores `is_focused` during deserialization so both fields can coexist.
+- Hyprland logout tries the Lua dispatcher `hl.dsp.exit()` used by the user's configuration, then the classic `exit` dispatcher for older configurations.
 
 ## Polling and events
 
