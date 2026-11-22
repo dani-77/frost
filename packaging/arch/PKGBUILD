@@ -1,7 +1,7 @@
 # Maintainer: Daniel Azevedo <daniazevedo77@posteo.net>
 
 pkgname=frost-d77
-pkgver=0.2.2
+pkgver=0.2.3
 pkgrel=1
 pkgdesc="Wayland desktop shell and session locker written in Rust"
 arch=('x86_64')
