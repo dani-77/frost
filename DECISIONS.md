@@ -18,6 +18,7 @@
 ## Workspaces
 
 - Spitfire, Wasp, and Whiplash announce `Active` and `Urgent` through `ext-workspace-v1`. Occupancy comes from `$XDG_RUNTIME_DIR/d77-workspaces-$WAYLAND_DISPLAY`, keyed by protocol ID. Without the counts file, workspaces are not marked empty.
+- The bar accepts a sole `ext-workspace-v1` group with no output assignment. Spitfire exposes one such group; output-scoped groups remain preferred for Wasp and Whiplash.
 - Sway uses `representation` for occupancy and `urgent` for urgency. Hyprland uses `windows`; niri associates each window with its workspace ID.
 
 ## Polling and events

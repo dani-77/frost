@@ -114,6 +114,14 @@ impl Frost {
                 .outputs
                 .get(&id)
                 .and_then(|output| snapshot.group_for_output(*output))
+                .or_else(|| {
+                    // A compositor can expose one workspace group without
+                    // assigning it to wl_output (for example Spitfire).
+                    // Keep output-scoped groups authoritative when available.
+                    (snapshot.groups.len() == 1)
+                        .then(|| &snapshot.groups[0])
+                        .filter(|group| group.outputs.is_empty())
+                })
         {
             use iced_wayland_subscriber::workspace::{State, WorkspaceCapabilities};
             let counts = self.window_counts.as_ref();
