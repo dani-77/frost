@@ -1,6 +1,6 @@
 # Template file for 'frost-d77'
 pkgname=frost-d77
-version=0.2.3
+version=0.2.4
 revision=1
 build_style=cargo
 hostmakedepends="pkg-config"

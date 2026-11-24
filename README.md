@@ -70,7 +70,7 @@ Versioned packaging recipes are in [`packaging/arch/PKGBUILD`](packaging/arch/PK
 | Clipboard | `cliphist` for history, `wl-clipboard` for capture and restoration, and `xdg-utils` for MIME inference with older cliphist versions |
 | Wi-Fi | `nmcli` or `iwgetid` for the SSID; route and state come from Linux |
 | Power profile | `powerprofilesctl` and a compatible Power Profiles API |
-| Volume | `wpctl` with PipeWire/WirePlumber; `pactl` (optional) lets Frost react to changes instead of polling every second |
+| Volume | `wpctl` with PipeWire/WirePlumber; `pactl` (optional) lets Frost react immediately to sink changes. Frost also checks once per second for ALSA mixer changes that emit no Pulse event |
 | Brightness | `brightnessctl` and a user-accessible backlight device; the level is read from `/sys/class/backlight` |
 | Music | `cmus-remote`; `tmux` or `screen` to start cmus from the dashboard |
 | Wallpaper | `awww` or `swww` with its daemon running |

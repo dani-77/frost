@@ -1,7 +1,7 @@
 //! Event sources that tell the shell when to re-read compositor and audio
 //! state. When a source is missing or stops, they fall back to polling at
-//! the old one-second rate and retry the source later, so behaviour is never
-//! worse than plain polling.
+//! the old one-second rate and retry the source later. Volume also polls
+//! while subscribed, since direct ALSA mixer changes may emit no Pulse event.
 
 use crate::services::Compositor;
 use iced::futures::{SinkExt, Stream, channel::mpsc};
@@ -38,19 +38,29 @@ pub fn workspaces(compositor: &Compositor) -> impl Stream<Item = ()> + use<> {
         Compositor::Hyprland => (hyprland_socket().map(Source::Socket), hyprland_event),
         Compositor::Other => (None, |_| false),
     };
-    watch(source, relevant)
+    watch(source, relevant, false)
 }
 
 /// Signals whenever the default sink's volume or mute state may have changed.
 pub fn volume() -> impl Stream<Item = ()> {
-    watch(Some(Source::Command("pactl", &["subscribe"])), pulse_event)
+    watch(
+        Some(Source::Command("pactl", &["subscribe"])),
+        pulse_event,
+        true,
+    )
 }
 
-fn watch(source: Option<Source>, relevant: fn(&str) -> bool) -> impl Stream<Item = ()> {
+fn watch(
+    source: Option<Source>,
+    relevant: fn(&str) -> bool,
+    poll_while_following: bool,
+) -> impl Stream<Item = ()> {
     iced::stream::channel(1, async move |mut out: mpsc::Sender<()>| {
         loop {
             if let Some(source) = &source
-                && follow(source, relevant, &mut out).await.is_err()
+                && follow(source, relevant, poll_while_following, &mut out)
+                    .await
+                    .is_err()
             {
                 return;
             }
@@ -70,6 +80,7 @@ fn watch(source: Option<Source>, relevant: fn(&str) -> bool) -> impl Stream<Item
 async fn follow(
     source: &Source,
     relevant: fn(&str) -> bool,
+    poll_while_following: bool,
     out: &mut mpsc::Sender<()>,
 ) -> Result<(), Closed> {
     // The child, if any, is killed when this function returns.
@@ -100,7 +111,24 @@ async fn follow(
     // State may have changed while nothing was watching.
     out.send(()).await.map_err(|_| Closed)?;
     let mut lines = reader.lines();
-    while let Ok(Some(line)) = lines.next_line().await {
+    let mut next_poll = tokio::time::Instant::now() + FALLBACK_INTERVAL;
+    loop {
+        let line = if poll_while_following {
+            match tokio::time::timeout_at(next_poll, lines.next_line()).await {
+                Ok(line) => line,
+                Err(_) => {
+                    out.send(()).await.map_err(|_| Closed)?;
+                    next_poll = tokio::time::Instant::now() + FALLBACK_INTERVAL;
+                    continue;
+                }
+            }
+        } else {
+            lines.next_line().await
+        };
+        let line = match line {
+            Ok(Some(line)) => line,
+            _ => break,
+        };
         if !relevant(&line) {
             continue;
         }
@@ -210,7 +238,7 @@ mod stream_tests {
                 "sh",
                 &["-c", "echo a; echo b; echo c; sleep 0.3; echo d; sleep 5"],
             );
-            let stream = watch(Some(source), |_| true);
+            let stream = watch(Some(source), |_| true, false);
             let start = tokio::time::Instant::now();
             let events: Vec<_> = stream.take(3).map(|()| start.elapsed()).collect().await;
             // Initial refresh, one for the a/b/c burst, one for d.
@@ -224,12 +252,26 @@ mod stream_tests {
         runtime().block_on(async {
             let source = Source::Command("frost-no-such-watcher", &[]);
             let start = tokio::time::Instant::now();
-            watch(Some(source), |_| true)
+            watch(Some(source), |_| true, false)
                 .take(2)
                 .collect::<Vec<_>>()
                 .await;
             let elapsed = start.elapsed();
             assert!(elapsed >= Duration::from_millis(900) && elapsed < Duration::from_secs(3));
+        });
+    }
+
+    #[test]
+    fn a_quiet_volume_source_still_polls() {
+        runtime().block_on(async {
+            let source = Source::Command("sh", &["-c", "sleep 3"]);
+            let start = tokio::time::Instant::now();
+            watch(Some(source), |_| true, true)
+                .take(2)
+                .collect::<Vec<_>>()
+                .await;
+            let elapsed = start.elapsed();
+            assert!(elapsed >= Duration::from_millis(900) && elapsed < Duration::from_secs(2));
         });
     }
 }
