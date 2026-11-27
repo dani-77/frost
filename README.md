@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/terminal.png" alt="Frost terminal emblem" width="220"></p>
 
-Frost is a Wayland shell in Rust inspired by [quickshell-d77](https://github.com/dani-77/quickshell-d77/tree/5b5a1b5560a676339d31e6361650b6a5e8899a37). Its panels use layer shell through `iced_exwlshell`; the locker uses Wayland session lock surfaces through Smithay Client Toolkit. Both are drawn with Iced 0.14 and Tiny Skia.
+Frost is a Wayland shell in Rust inspired by [quickshell-d77](https://github.com/dani-77/quickshell-d77/tree/5b5a1b5560a676339d31e6361650b6a5e8899a37) (archived; superseded by [Utumno](https://github.com/dani-77/utumno)). Its panels use layer shell through `iced_exwlshell`; the locker uses Wayland session lock surfaces through Smithay Client Toolkit. Both are drawn with Iced 0.14 and Tiny Skia.
 
 | Component | Current development branch |
 | --- | --- |
@@ -140,7 +140,7 @@ By default, the bar sits 10 logical pixels from the top and sides and is 40 logi
 
 On Spitfire, Wasp, and Whiplash, the bar reads urgent state from `ext-workspace-v1` and occupancy from `$XDG_RUNTIME_DIR/d77-workspaces-$WAYLAND_DISPLAY`. Sway uses `urgent` and `representation`; Hyprland uses window counts; niri queries windows by workspace.
 
-The bar icons follow [quickshell-d77](https://github.com/dani-77/quickshell-d77) and [fabric-d77](https://github.com/dani-77/fabric-d77). `assets/FrostSymbols.ttf` embeds [Nerd Fonts Symbols Only](https://github.com/ryanoasis/nerd-fonts/tree/v3.5.0/patched-fonts/NerdFontsSymbolsOnly), including the session and cmus glyphs. Licenses are in `licenses/`.
+The bar icons follow [quickshell-d77](https://github.com/dani-77/quickshell-d77) (now archived in favour of [Utumno](https://github.com/dani-77/utumno)) and [fabric-d77](https://github.com/dani-77/fabric-d77). `assets/FrostSymbols.ttf` embeds [Nerd Fonts Symbols Only](https://github.com/ryanoasis/nerd-fonts/tree/v3.5.0/patched-fonts/NerdFontsSymbolsOnly), including the session and cmus glyphs. Licenses are in `licenses/`.
 
 The launcher resolves `Icon=` through the configured GTK theme and then `hicolor`. `FROST_ICON_THEME` can select another installed theme. Wallpaper thumbnails are generated in the background when the panel opens.
 
