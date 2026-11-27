@@ -2,7 +2,7 @@
 
 ## Palette and wallpaper
 
-- Frost reads `~/.cache/d77/palette.json` and `~/.config/d77/theme-mix`, shared with quickshell-d77, Utumno, and fabric-d77. It ignores a palette whose source does not match the active wallpaper.
+- Frost reads `~/.cache/d77/palette.json` and `~/.config/d77/theme-mix`, shared with Utumno and fabric-d77 (and quickshell-d77, now archived in favour of Utumno). It ignores a palette whose source does not match the active wallpaper.
 - When a wallpaper is selected, Frost applies it with `awww` or `swww`, stores the choice in `~/.cache/frost/wallpaper/current`, and generates the palette with Matugen. The Matugen template is embedded in the binary so `cargo install` remains sufficient.
 - Wallpaper jobs run one at a time; rapid clicks replace the pending target, and the final target runs after the current job. The picker stays open and highlights the target. The wallpaper state is replaced atomically, and Matugen writes to a Frost-owned temporary file before publishing `d77/palette.json`.
 - An empty Frost state file means the user cleared the wallpaper. Without its own state, Frost can also recognize wallpaper choices from the other shells.
